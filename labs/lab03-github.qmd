@@ -3,13 +3,11 @@ title: "Lab 03 - EDA and Viz 1"
 subtitle: "JSC370 (Winter 2026)"
 date: "January 21, 2026"
 format:
-  html:
+  live-html:
     toc: true
-filters:
-  - r-wasm/live
 jupyter: python3
 execute:
-  enabled: false
+  enabled: true
   echo: true
   warning: false
   message: false
