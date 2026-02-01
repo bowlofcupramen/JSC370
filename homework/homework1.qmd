@@ -1,0 +1,175 @@
+---
+title: "Homework 1 - EDA and Visualizations"
+format:
+  html:
+    embed-resources: true
+jupyter: python3
+---
+
+```{python}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from plotnine import *
+import statsmodels.api as sm
+from scipy.stats import chisquare
+```
+
+# Steps
+1. 
+```{python}
+data = pd.read_csv("/Users/djhji/Desktop/UofT/JSC370/JSC370/homework/Major_Crime_Indicators.csv")
+key_vars = ["MCI_CATEGORY", "OFFENCE", "OCC_YEAR", "OCC_MONTH", "OCC_DAY",
+"OCC_DOY", "OCC_HOUR", "LOCATION_TYPE", "NEIGHBOURHOOD_158", "LONG_WGS84", "LAT_WGS84"]
+data = data[key_vars]
+```
+
+```{python}
+data.shape
+```
+```{python}
+data.head
+```
+```{python}
+data.dtypes
+```
+```{python}
+data.isnull().sum()
+data.loc[data['OCC_YEAR'].isnull(), 'OCC_YEAR'] = np.nan
+data.loc[data['OCC_MONTH'].isnull(), 'OCC_YEAR'] = np.nan
+data.loc[data['OCC_DAY'].isnull(), 'OCC_YEAR'] = np.nan
+data.loc[data['OCC_DOY'].isnull(), 'OCC_YEAR'] = np.nan
+```
+Summary: 
+The data was read in, then all columns other than the key features are dropped. The datatypes were checked via the header and dtypes, which allows a comprehensive understanding of the datatypes. 
+
+There are 151 entries with missing OCC dates, which includes OCC_YEAR, OCC_MONTH, OCC_DAY, and OCC_DOY. 
+
+There are 452,949 entries with 11 features (only counting key features).
+
+The variable names are MCI_CATEGORY, OFFENCE, OCC_YEAR, OCC_MONTH, OCC_DAY, OCC_DOY, OCC_HOUR, LOCATION_TYPE, NEIGHBOURHOOD_158, LONG_WGS84, LAT_WGS84.
+
+2. 
+```{python}
+data.groupby("MCI_CATEGORY").size().idxmax()
+data.loc[data['MCI_CATEGORY'] == "Assault"].groupby("OFFENCE").size().idxmax()
+```
+```{python}
+data = data.loc[(data['MCI_CATEGORY'] == "Assault") & (data['OFFENCE'] == "Assault")]
+data.columns = ["mci", "offence", "yr", "mo", "day", "doy", "hr", "loc", "region", "long", "lat"]
+```
+```{python}
+data = data.astype({
+    "mci": "category",
+    "offence": "category",
+    "mo": "category",
+    "loc": "category",
+    "region": "category",
+    "yr": "Int64"
+})
+```
+```{python}
+temp = data.copy()
+by_year = temp.groupby("yr").size()
+by_month = temp.groupby("mo").size()
+by_day = temp.groupby("day").size()
+by_date = temp.groupby(["mo", "day"]).size()
+by_doy = temp.groupby("doy").size()
+by_hour = temp.groupby("hr").size()
+by_loc = temp.groupby("loc").size()
+by_hood = temp.groupby("region").size()
+```
+Summary:
+The MCI category and offence chosen were both assault. This was decided by first finding the MCI category with most entries, then within that category, choosing the offence with most entries.
+
+There were data points that were potential outliers I noticed, which included things like the unusually large number of crimes that occur of the first of each month (especially April and January), the large number of entries that happened at noon (12pm, or hour 12 of the day), and certain location types that had very little entries, such as Ttc Support Vehicle, which only had one entry. However, after checking these entries, I found nothing particularly unusual (including impossible values), or required further actions. As such, I did nothing. 
+
+Furthermore, text based features were converted to category type, since that is more appropriate in this context.
+
+3. 
+```{python}
+occ = data.groupby(["yr", "mo"]).size()
+occ[occ <= 500]
+```
+```{python}
+data = data.loc[(2014 <= data["yr"]) & (data["yr"] <= 2024)]
+```
+
+Summary:
+I used the subset of years from 2014 to 2024 inclusive. The documentation only includes years starting from 2014, plus the years prior to that in the actual dataset had very few entries, so I deemed it appropriate to remove them. 
+As for 2025, it did not appear complete since there were absolutely no entries from October onwards, meaning that the data for the year was incomplete. Thus I deemed it appropriate to drop as well.
+
+4. 
+```{python}
+by_year = data.copy().astype({"yr": "category"}).groupby("yr").size().reset_index(name="count")
+by_year
+```
+```{python}
+(   ggplot(by_year, aes(x="yr", y="count")) +
+    geom_bar(stat="identity", fill="steelblue") +
+    labs(
+        title="Crime Count by Year",
+        x="Year",
+        y="Count"
+    ) +
+    theme_minimal()
+)
+```
+```{python}
+X = data.copy().dropna().astype({"yr": "int64"}).groupby("yr").size().reset_index(name="count")
+X_const = sm.add_constant(X["yr"])
+y = X["count"]
+
+pois_model = sm.GLM(y, X_const, family=sm.families.Poisson()).fit()
+pois_model.summary()
+rr = np.exp(pois_model.params["yr"])
+```
+
+
+Summary:
+First, since some entries were missing a year, they were dropped. 
+Based on the rates ratio (rr in the code block above), there is an approximate 3.19% increase in crime rate per year. 
+The evidence is statistically significant based on the p value of 0.000, which can be seen from the model summary. 
+The model, being a Poisson regression, assumes that the data points are independent and that there is a linear relationship between the year and the log of the number of crimes.
+
+5. 
+```{python}
+full_yr = data.loc[data["yr"] == 2024]
+
+def season(mo):
+    if mo in ["January", "February", "December"] :
+        return "winter"
+    elif mo in ["March", "April", "May"]:
+        return "spring"
+    elif mo in ["June", "July", "August"]:
+        return "summer"
+    else:
+        return "fall"
+full_yr["season"] = full_yr["mo"].apply(season)
+```
+```{python}
+group_season = full_yr.groupby("season").size().reset_index(name="count")
+print(group_season.describe())
+(   ggplot(group_season, aes(x="season", y="count")) +
+    geom_col(fill="steelblue") +
+    labs(
+        title="Crime Counts by Season",
+        x="Season",
+        y="Count"
+    ) +
+    theme_minimal()
+)
+```
+```{python}
+chi2, p = chisquare(group_season["count"].sort_index())
+print("chi sq: " + str(chi2) + "\np: " + str(p))
+```
+
+Summary:
+First, looking at the table of summary of statistics, the difference between the season with most and least crimes is around 500 occurrences, which is over 12.5% of the number of occurences in the season with the least.
+
+Then, looking at the Chi-squared test results, we see a relatively large Chi-square of around 40, paired with a p-value of around 1.2e-8, which is extremely small. Using a threshold of 0.05, I would reject the null hypothesis of each season having equal number of crimes, thereby accepting the alternative hypothesis, which is that difference seasons do indeed experience differing amounts of crime.
+
+Based on the results, although there are differences, if one were to consider the 95% interval centered at the mean 4301 using the standard deviation of about 238.74, then none of the seasons have a count that is higher or lower than expected.
+
+6. 
