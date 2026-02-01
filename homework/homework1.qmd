@@ -4,6 +4,8 @@ format:
   html:
     embed-resources: true
 jupyter: python3
+execute: 
+  warning: false
 ---
 
 ```{python}
@@ -13,6 +15,9 @@ import matplotlib.pyplot as plt
 from plotnine import *
 import statsmodels.api as sm
 from scipy.stats import chisquare
+from scipy.stats import chi2_contingency
+import folium
+from folium.plugins import MarkerCluster
 ```
 
 # Steps
@@ -137,7 +142,7 @@ The model, being a Poisson regression, assumes that the data points are independ
 full_yr = data.loc[data["yr"] == 2024]
 
 def season(mo):
-    if mo in ["January", "February", "December"] :
+    if mo in ["January", "February", "December"]:
         return "winter"
     elif mo in ["March", "April", "May"]:
         return "spring"
@@ -166,6 +171,12 @@ print("chi sq: " + str(chi2) + "\np: " + str(p))
 ```
 
 Summary:
+The seasons are defined as follows:
+December, January, February are winter.
+March, April, May are spring.
+June, July, August are summer.
+September, October, November are fall.
+
 First, looking at the table of summary of statistics, the difference between the season with most and least crimes is around 500 occurrences, which is over 12.5% of the number of occurences in the season with the least.
 
 Then, looking at the Chi-squared test results, we see a relatively large Chi-square of around 40, paired with a p-value of around 1.2e-8, which is extremely small. Using a threshold of 0.05, I would reject the null hypothesis of each season having equal number of crimes, thereby accepting the alternative hypothesis, which is that difference seasons do indeed experience differing amounts of crime.
@@ -173,3 +184,73 @@ Then, looking at the Chi-squared test results, we see a relatively large Chi-squ
 Based on the results, although there are differences, if one were to consider the 95% interval centered at the mean 4301 using the standard deviation of about 238.74, then none of the seasons have a count that is higher or lower than expected.
 
 6. 
+```{python}
+def day_night(time):
+    if 5 <= time < 17:
+        return "day"
+    else:
+        return "night"
+full_yr["day_night"] = full_yr["hr"].apply(day_night)
+```
+```{python}
+group_hour = full_yr.groupby("hr").size().reset_index(name="count")
+print(group_hour)
+(   ggplot(group_hour, aes(x="hr", y="count")) +
+    geom_col(fill="steelblue") +
+    labs(
+        title="Crime Counts by Hour of the Day",
+        x="Hour of Day",
+        y="Count"
+    ) +
+    theme_minimal()
+)
+```
+```{python}
+contingency = pd.crosstab(full_yr["season"], full_yr["day_night"])
+chi2, p, dof, expected = chi2_contingency(contingency)
+print(contingency)
+print("chi sq: " + str(chi2) + "\np: " + str(p) + "\ndof: " + str(dof) + "\nexpected: \n" + str(expected))
+```
+
+Summary:
+Aside from 12am, crime counts decrease from 1am to 6am, then increase throughout the day intil it plateaus from around 3pm to 8pm, after which it falls again for the rest of the day. Noon (12pm) is also an exception like 12am in that it spikes in counts.
+
+From there, day is defined to be 5am to 4pm, inclusive, while all other times would be night.
+
+There is indeed evidence that the day/night distributions of crime changes across seasons, since the Chi_squared test yields a p-value of around 0.0022, which is much less than a threshold of 0.05. Thus we reject the null hypothesis in which there are no differences between the distributions.
+
+As for which season looks most different, it is the summer. During the summr, the day time crimes is the second least while the nighttime crimes is the most out of all four, with an absolute difference that is the greatest out of all season, at 490. 
+
+7. 
+```{python}
+top_ten_region = full_yr.groupby("region").size().reset_index(name="count").sort_values(by="count", ascending=False).head(n=10)
+print(top_ten_region)
+```
+
+Summary:
+Despite other regions being inluded in the dataset, such as Etobicoke and Scarborough, the majority of the top 10 crime count neighbourhoods are in Toronto, mostly on the east side with respect to Yonge St.
+
+8. 
+```{python}
+agg_region = (
+    data.groupby("region")
+      .agg(
+          count=("region", "size"),
+          lat=("lat", "mean"),
+          long=("long", "mean")
+      )
+      .reset_index()
+)
+map = folium.Map(location=[agg_region["lat"].mean(), agg_region["long"].mean()], zoom_start=11)
+
+for _, row in agg_region.iterrows():
+    folium.CircleMarker(
+        location=[row["lat"], row["long"]],
+        radius=row["count"] / 50,
+        popup=f"{row['region']}: {row['count']}",
+        fill=True,
+        fill_opacity=0.6
+    ).add_to(map)
+
+map
+```
