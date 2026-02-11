@@ -77,7 +77,7 @@ mt_samples.head()
 We can use `value_counts()` from pandas to figure out how many different medical specialties are in the data. Are these categories related? overlapping? evenly distributed? Make a bar plot.
 
 ```{python}
-#| eval: false
+#| eval: true
 
 specialty_counts = mt_samples['medical_specialty'].value_counts().reset_index()  # Hint: count categories
 specialty_counts.columns = ['medical_specialty', 'count']
@@ -103,7 +103,7 @@ Other than that, as one goes down the list, there are the less heard of ones, su
 
 
 ```{python}
-#| eval: false
+#| eval: true
 
 # Tokenize all transcriptions
 def tokenize_text(text):
