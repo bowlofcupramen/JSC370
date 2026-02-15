@@ -1,0 +1,238 @@
+---
+title: "Homework 2 - Data Scraping, APIs and Advanced Regression"
+format: pdf
+---
+
+## Due Date
+
+Sunday February 15, 2026 by 11:59pm.
+
+# Learning Goals
+- Use an API, scrape, wrangle, and get familiar different datasets. 
+- Make visualizations
+- Conduct GAM regression modeling and compare to linear regression
+
+
+## Assignment Description
+
+For this assignment, we will be analyzing data on life expectancy and alcohol consumption.
+The learning objectives are to conduct data wrangling and visualization keeping key questions in mind. We will also do a regression analysis.
+
+The primary questions of interest are:
+
+- Is there an association between life expectancy and alcohol consumption?
+
+- How have life expectancy and alcohol consumption changed over time?
+
+- Do other country specific factors such as per capita gross domestic product or population play a role in the relationship between alcohol consumption and life expectancy?
+
+## Data Acquisition and Wrangling
+```{python}
+#| label: setup
+#| message: false
+#| warning: false
+import pandas as pd
+import numpy as np
+import requests
+from bs4 import BeautifulSoup
+from io import StringIO
+import re
+import json
+import time
+from plotnine import *
+import warnings
+warnings.filterwarnings('ignore')
+```
+
+1. (15 points) Obtain two datasets: life expectancy (via API) and alcohol consumption (via web scraping).
+
+**For life expectancy, population, and GDP:** Use the [World Bank API](https://datahelpdesk.worldbank.org/knowledgebase/articles/889392-about-the-indicators-api-documentation) to fetch the following indicators:
+
+- `SP.DYN.LE00.IN` - Life expectancy at birth, total (years)
+- `SP.POP.TOTL` - Population, total
+- `NY.GDP.PCAP.CD` - GDP per capita (current US$)
+
+You will need to:
+
+- Parse the nested JSON response into a clean DataFrame for each indicator
+- Handle missing values and filter to relevant years (1996, 2016, 2019)
+- Note: The API returns data for regions/aggregates as well as countries; you may want to filter these out
+- Merge the three indicators together by country and year
+```{python}
+BASE_URL = "https://api.worldbank.org/v2/country/all/indicator/"
+url_expect = f"{BASE_URL}SP.DYN.LE00.IN?format=json"
+url_pop = f"{BASE_URL}SP.POP.TOTL?format=json"
+url_gdp = f"{BASE_URL}NY.GDP.PCAP.CD?format=json"
+response_expect = requests.get(url_expect, params={"page": "1"}, timeout=30)
+response_pop = requests.get(url_pop, params={"page": "1"}, timeout=30)
+response_gdp = requests.get(url_gdp, params={"page": "1"}, timeout=30)
+```
+```{python}
+#| message: false
+# These iso codes for countries were obtained from a download here: https://datahelpdesk.worldbank.org/knowledgebase/articles/378834-how-does-the-world-bank-classify-countries
+country_iso_codes = {"AFG","ALB","DZA","ASM","AND","AGO","ATG","ARG","ARM","ABW","AUS","AUT","AZE","BHS","BHR","BGD","BRB","BLR","BEL","BLZ","BEN","BMU","BTN","BOL","BIH","BWA","BRA","VGB","BRN","BGR","BFA","BDI","CPV","KHM","CMR","CAN","CYM","CAF","TCD","CHI","CHL","CHN","COL","COM","COD","COG","CRI","CIV","HRV","CUB","CUW","CYP","CZE","DNK","DJI","DMA","DOM","ECU","EGY","SLV","GNQ","ERI","EST","SWZ","ETH","FRO","FJI","FIN","FRA","PYF","GAB","GMB","GEO","DEU","GHA","GIB","GRC","GRL","GRD","GUM","GTM","GIN","GNB","GUY","HTI","HND","HKG","HUN","ISL","IND","IDN","IRN","IRQ","IRL","IMN","ISR","ITA","JAM","JPN","JOR","KAZ","KEN","KIR","PRK","KOR","XKX","KWT","KGZ","LAO","LVA","LBN","LSO","LBR","LBY","LIE","LTU","LUX","MAC","MDG","MWI","MYS","MDV","MLI","MLT","MHL","MRT","MUS","MEX","FSM","MDA","MCO","MNG","MNE","MAR","MOZ","MMR","NAM","NRU","NPL","NLD","NCL","NZL","NIC","NER","NGA","MKD","MNP","NOR","OMN","PAK","PLW","PAN","PNG","PRY","PER","PHL","POL","PRT","PRI","QAT","ROU","RUS","RWA","WSM","SMR","STP","SAU","SEN","SRB","SYC","SLE","SGP","SXM","SVK","SVN","SLB","SOM","ZAF","SSD","ESP","LKA","KNA","LCA","MAF","VCT","SDN","SUR","SWE","CHE","SYR","TWN","TJK","TZA","THA","TLS","TGO","TON","TTO","TUN","TUR","TKM","TCA","TUV","UGA","UKR","ARE","GBR","USA","URY","UZB","VUT","VEN","VNM","VIR","PSE","YEM","ZMB","ZWE"}
+
+def filter_append(data, df):
+  count = 0
+  for entry in data[1]:
+    if entry["countryiso3code"] in country_iso_codes:
+      df.append({"country": entry["country"]["value"], "year": entry["date"], "value": entry["value"]})
+    count += 1
+  return count
+
+def get_df_year(url, df, pg, year):
+  count = 0
+  prev = 0
+  url = url + f"&date={year}"
+  for i in range(1, pg + 1):
+    params = {"page": i}
+    data = requests.get(url, params=params)
+    assert(data.status_code == 200)
+    data = data.json()
+    count += filter_append(data, df)
+    if count >= prev:
+      prev = count
+      print(count)
+    time.sleep(0.1)
+
+pg_expect = requests.get(url_expect + "&date=1996").json()[0]["pages"]
+# After checking each of the page counts, I realized each year all had the same number of pages as well as for each category (population, life expectancy, GDP)
+df_expect = []
+df_pop = []
+df_gdp = []
+for year in [1996, 2016, 2019]:
+  get_df_year(url_expect, df_expect, pg_expect, year)
+  get_df_year(url_pop, df_pop, pg_expect, year)
+  get_df_year(url_gdp, df_gdp, pg_expect, year)
+```
+```{python}
+# Note that each of df_expect, df_pop, and df_gdp have the same number of entries
+df = []
+for i in range(len(df_expect)):
+  if df_expect[i]["year"] == df_pop[i]["year"] == df_gdp[i]["year"]:
+    if df_expect[i]["country"] == df_pop[i]["country"] == df_gdp[i]["country"]:
+      if df_expect[i]["value"] == None:
+        df_expect[i]["value"] = np.NaN
+      if df_pop[i]["value"] == None:
+        df_pop[i]["value"] = np.NaN
+      if df_gdp[i]["value"] == None:
+        df_gdp[i]["value"] = np.NaN
+      df.append({"country": df_expect[i]["country"], "year": df_expect[i]["year"], "lf_exp": df_expect[i]["value"], "pop": df_pop[i]["value"], "gdp": df_gdp[i]["value"]})
+df = pd.DataFrame(df)
+```
+See the [World Bank API documentation](https://datahelpdesk.worldbank.org/knowledgebase/articles/889392-about-the-indicators-api-documentation) for more details on available endpoints and filtering options.
+
+**For alcohol consumption:** Use web scraping to extract the **historical consumption table (with data for 1996, 2016, and 2019)** from the [Wikipedia page on alcohol consumption per capita](https://en.wikipedia.org/wiki/List_of_countries_by_alcohol_consumption_per_capita). 
+
+```{python}
+ALCOHOL_URL = "https://en.wikipedia.org/wiki/List_of_countries_by_alcohol_consumption_per_capita"
+HEADERS = {
+    "User-Agent": "jsc370-class-homework/1.0 (educational use)",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+alcohol_request = requests.get(ALCOHOL_URL, headers=HEADERS, timeout=30)
+print(f"Status code: {alcohol_request.status_code}")
+
+# Parse all tables
+alc_tables = pd.read_html(StringIO(alcohol_request.text))
+print(f"Found {len(alc_tables)} tables")
+
+# Examine the tables to find the right one
+for i, table in enumerate(alc_tables):
+    print(f"\nTable {i}: {table.shape[0]} rows x {table.shape[1]} cols")
+    print(f"  Columns: {table.columns.tolist()}")
+```
+
+```{python}
+# The table we want is the second one (index 1)
+alc = alc_tables[1]
+alc = alc.rename(columns={"Country": "country", "1996[9]": "1996", "2016[10]": "2016", "2019[6][a]": "2019"})
+alc = pd.melt(alc, id_vars=["country"], value_vars=["1996", "2016", "2019"], var_name="year")
+alc["year"] = alc["year"].astype(int)
+alc = alc.replace("–", np.nan)
+alc["value"] = alc["value"].astype(float)
+df["year"] = df["year"].astype(int)
+```
+
+Before merging, prepare both datasets as follows:
+
+  a. **World Bank API data:** Parse the JSON responses from the World Bank API into DataFrames. The API response contains nested dictionaries with fields like `country`, `date`, and `value`. Extract the relevant fields into clean DataFrames for each indicator (life expectancy, population, and GDP per capita), then merge them together by country and year.
+  b. **Alcohol (scraped data):** Identify which Wikipedia table contains the historical data (1996, 2016, 2019) and extract it. Clean the scraped data: remove any footnote markers (e.g., `[1]`), convert columns to appropriate data types, and handle any missing values.
+  c. Reshape the alcohol data from wide to long format, creating a "Year" column with values 1996, 2016, and 2019. You can use `pd.melt()` in Python.
+  d. Filter the life expectancy data to include only the years that match the alcohol data (1996, 2016, 2019).
+
+Merge these datasets by country name and year. Note: You may need to standardize country names between datasets (e.g., "United States" vs "United States of America"). 
+```{python}
+diff_name = []
+for country in alc["country"].unique():
+  if country not in df["country"].unique():
+    diff_name.append(country)
+```
+```{python}
+df["country"] = df["country"].replace({"Bahamas, The": "Bahamas", "Brunei Darussalam": "Brunei", "Cabo Verde": "Cape Verde", "Congo, Rep.": "Congo","Czechia": "Czech Republic", "Congo, Dem. Rep.": "DR Congo", "Egypt, Arab Rep.": "Egypt", "Gambia, The": "Gambia", "Iran, Islamic Rep.": "Iran", "Kyrgyz Republic": "Kyrgyzstan", "Lao PDR": "Laos", "North Macedonia": "Macedonia", "Micronesia, Fed. Sts.": "Micronesia", "Korea, Dem. People's Rep.": "North Korea", "Russian Federation": "Russia", "Slovak Republic": "Slovakia", "Somalia, Fed. Rep.": "Somalia", "Korea, Rep.": "South Korea", "Syrian Arab Republic": "Syria", "Turkiye": "Turkey", "Venezuela, RB": "Venezuela", "Viet Nam": "Vietnam", "Yemen, Rep.": "Yemen"})
+alc["country"] = alc["country"].replace({"Ivory Coast": "Cote d'Ivoire", "Estonia[b]": "Estonia", "Eswatini[c]": "Eswatini", "Saint Kitts and Nevis": "St. Kitts and Nevis", "Saint Lucia": "St. Lucia", "Saint Vincent and the Grenadines": "St. Vincent and the Grenadines", "São Tomé and Príncipe": "Sao Tome and Principe"})
+```
+```{python}
+merged = df.merge(alc, how="inner")
+merged = merged.rename(columns={"value": "consum"})
+```
+
+Conduct basic EDA on the merged dataset: check dimensions, missing values, summary statistics of key variables to look for outliers. Which countries have the lowest and highest life expectancies and alcohol consumption? 
+```{python}
+print(f"Shape: {merged.shape}")
+print(f"Number of null entries:\n{merged.isna().sum()}")
+print(f"Country with highest life expectancy: {merged.loc[merged["lf_exp"].idxmax()]["country"]}")
+print(f"Country with lowest life expectancy: {merged.loc[merged["lf_exp"].idxmin()]["country"]}")
+print(f"Country with highest alcohol consumption: {merged.loc[merged["consum"].idxmax()]["country"]}")
+print(f"Country with lowest alcohol consumption: {merged.loc[merged["consum"].idxmin()]["country"]}")
+print(f"Country with highest population: {merged.loc[merged["pop"].idxmax()]["country"]}")
+print(f"Country with lowest population: {merged.loc[merged["pop"].idxmin()]["country"]}")
+print(f"Country with highest GDP: {merged.loc[merged["gdp"].idxmax()]["country"]}")
+print(f"Country with lowest GDP: {merged.loc[merged["gdp"].idxmin()]["country"]}")
+```
+
+Write a paragraph describing your scraping and cleaning steps. Include a written summary of the variables and the number of observations before and after merging. Document any countries that didn't match and how you handled them. Also summarize your findings from the basic EDA.
+
+For scraping, I first obtained all tables, then printed the dimensions and compared them to the tables on the actual webpage to find the one I required. For data cleaning, I first obtained a list of all country iso codes from the World Bank and filtered the data for those to remove regional aggregates (link can be found in a code chunk above). After this was done, all missing values were set to NaN and information from each category (life expectancy, population, GDP) were merged into one DataFrame based on country and year. For the scraped data, the column names and country names had the footnote marker removed. Then, by comparing the country names that existed in only the scraped data or only in the World Bank data, I standardized the country names, usually opting to use the shorter form, such as "Bahamas" over "Bahamas, The". The types for each were also casted such that population and year were integers, while life expectancy and alcohol consumption were decimal values (doubles). Finally, an inner join was performed to combine the API data and the scraped data into one DataFrame. By using an inner join, countries that only existed in one of the datasets were dropped. 
+Prior to merging, the API dataset had 651 rows, with 217 rows per year. The scraped dataset had 573 rows, with 191 rows per year. After merging, there were 564 rows, with 188 rows per year.
+After looking at the maximum and minimum of life expectancy, population, GDP per capita, and alcohol consumption, I did some research and found the data relatively consistent with external sources. Tuvalu and China's populations lined up, Andorra and Central African Republic's life expectancies line up, Luxembourg and Liberia's GDP per capita are close to values found online, and same for Romania and Bangladesh's alcohol consumption.
+
+2. (4 points) Create a summary table of the merged dataset showing the mean and sd of life expectancy, alcohol consumption, population, and GDP per capita by year. Briefly summarize.
+```{python}
+print(merged.describe())
+```
+Across all three years, the lowest life expectancy was around 31.5 years, while the highest was around 84.5 years, with a median of around 71 years.
+The lowest population was around 9300 while the highest was arond 1.4 billion, with a median of about 7.8 million.
+The lowest GDP per capita (in USD) was around 71 while the highest was around 113,000, with a median of about 4100.
+The lowest alcohol consumption per capita (in litres) of those aged 15 and over was around 0 while the highest was around 17.
+
+
+3. (4 points) Create a new categorical variable named "gdp_level" using the GDP per capita variable. Calculate the quartiles of GDP per capita. Categorize GDP level as low (0-q1), medium (q1-q3), and high (q3+). To make sure the variable is correctly coded, create a summary table that contains the minimum GDP per capita, maximum GDP per capita, and number of observations for each category.
+```{python}
+merged["gdp_level"] = pd.qcut(merged["gdp"], q=[0, 0.25, 0.75, 1], labels=["low", "medium", "high"])
+print(f"Counts for each category:\n{merged["gdp_level"].value_counts()}")
+print(f"max: {merged["gdp"].max()}")
+print(f"min: {merged["gdp"].min()}")
+```
+
+## Visualization
+
+4. (15 points) Create the following figures with `plotnine` and interpret them. Be sure to include easily understandable axes, titles, and legends. 
+  a. Two line plots: one of life expectancy by year and the other of alcohol consumption by year with lines for Canada and 3 other contrasting countries.
+  b. Facet plot by year for 1996, 2016, and 2019 showing scatterplots with linear and lowess regression lines of life expectancy and alcohol consumption.
+  c. Facet plot by year for 1996, 2016, and 2019 showing boxplots of alcohol consumption by GDP level.
+  d. A barplot showing life expectancy in 1996 and 2019 for the 10 countries with the largest change in life expectancy between 1996 and 2019.
+  e. Come up with your own plot that will help to understand the role of GDP in the association between alcohol and life expectancy.
+
+
+
+## Advanced Regression
+
+5. (8 points) Construct a multiple linear regression model to examine the association between life expectancy and alcohol consumption adjusted for GDP per capita, and year. Note you should scale GDP by population to get GDP per capita since the values can be very large. 
+Then fit a gam model where you put a smooth on GDP per capita and alcohol consumption.
+
+Provide the following in your analyses:
+
+  a. Summaries of your models, including overall model fit and interpretation of the parameter estimates (linear and non-linear).
+  b. Plot of the smoothed variables from the gam model and interpret.
+
