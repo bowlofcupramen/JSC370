@@ -219,11 +219,96 @@ print(f"min: {merged["gdp"].min()}")
 
 4. (15 points) Create the following figures with `plotnine` and interpret them. Be sure to include easily understandable axes, titles, and legends. 
   a. Two line plots: one of life expectancy by year and the other of alcohol consumption by year with lines for Canada and 3 other contrasting countries.
-  b. Facet plot by year for 1996, 2016, and 2019 showing scatterplots with linear and lowess regression lines of life expectancy and alcohol consumption.
-  c. Facet plot by year for 1996, 2016, and 2019 showing boxplots of alcohol consumption by GDP level.
-  d. A barplot showing life expectancy in 1996 and 2019 for the 10 countries with the largest change in life expectancy between 1996 and 2019.
-  e. Come up with your own plot that will help to understand the role of GDP in the association between alcohol and life expectancy.
+```{python}
+countries = ["Canada", "Japan", "Russia", "Brazil"]
+(
+  ggplot(merged[merged["country"].isin(countries)], aes("year", "lf_exp", color="country")) +
+    geom_line(size=1.2) +
+    labs(title="Life Expectancy Over Time",
+         x="Year",
+         y="Life Expectancy at Birth (years)",
+         color="Country") +
+    theme(axis_text_x=element_text(rotation=45))
+)
+```
+```{python}
+# Alcohol consumption line plot
+(
+  ggplot(merged[merged["country"].isin(countries)], aes("year", "consum", color="country")) +
+    geom_line(size=1.2) +
+    labs(title="Alcohol Consumption Over Time",
+         x="Year",
+         y="Alcohol Consumption (litres per capita)",
+         color="Country") +
+    theme(axis_text_x=element_text(rotation=45))
+)
+```
+  The average change in life expectancy between 1996 to 2016 and between 2016 and 2019 remain roughly the same across all 4 countries, with the most noticeable being Russia, which experienced a greater average increase from 2016 to 2019. On the other hand, while all 4 countries's average alcohol consumption increased on average from 1996 to 2016, only Canada's increased from 2016 to 2019, while the 3 others decreased. In particular, Japan and Russia had a relatively large decrease between 2016 to 2019, while Brazil had a minor decrease. It can also be seen that Japan had a much smaller increase in alcohol consumption between 1996 and 2016 than the other 3 countries.
 
+  b. Facet plot by year for 1996, 2016, and 2019 showing scatterplots with linear and lowess regression lines of life expectancy and alcohol consumption.
+```{python}
+(
+  ggplot(merged, aes("consum", "lf_exp")) +
+    geom_point(alpha=0.6) +
+    geom_smooth(method="lm", color="blue", se=False) +
+    geom_smooth(method="lowess", color="red", se=False) +
+    facet_wrap("~year") +
+    labs(title="Life Expectancy vs Alcohol Consumption by Year",
+         x="Alcohol Consumption (litres per capita)",
+         y="Life Expectancy at Birth (years)") +
+    theme(axis_text_x=element_text(rotation=45))
+)
+```
+All three plots have a trend of higher alcohol consumption lining up with higher life expectancy at birth. Though this is not necessarily causal or directly related as it is possible that higher alcohol consumption and higher life expectancy could both simply be traits that more developed countries tend to have. It is also noticeable that the correlation does not seem to strong from the high scattering (variance), and the slopes of the linear regression line appears to be less steep for 2016 and 2019. At the same time, the lowess regresison lines are very close in shape to the linear regression line for 2016 and 2019.
+
+  c. Facet plot by year for 1996, 2016, and 2019 showing boxplots of alcohol consumption by GDP level.
+```{python}
+(
+  ggplot(merged, aes("gdp_level", "consum", fill="gdp_level")) +
+    geom_boxplot() +
+    facet_wrap("~year") +
+    labs(title="Alcohol Consumption by GDP Level",
+         x="GDP Level",
+         y="Alcohol Consumption (litres per capita)") +
+    theme(axis_text_x=element_text(rotation=45), legend_position="none")
+)
+```
+  There is a very distinct trend of higher GDP category countries having in general higher alcohol consumption. This trend appears for all 3 years. Furthermore, the outliers for the high GDP countries are all for lower alcohol consumption, unlike the medium and low GDP countries, where outliers are on the higher alcohol consumption side. It is also interesting to note that the countries without a GDP value all have low alcohol consumption, with a mean generally quite close to the low GDP countries. From this, it is possible that these countries would belong to the low GDP category if their GDP were collected. 
+  d. A barplot showing life expectancy in 1996 and 2019 for the 10 countries with the largest change in life expectancy between 1996 and 2019.
+```{python}
+max_change = (merged
+             .pivot(index="country", columns="year", values="lf_exp")
+             .reset_index())
+max_change["change"] = max_change[2019] - max_change[1996]
+top_10 = max_change.nlargest(10, "change").melt(id_vars="country", value_vars=[1996, 2019], var_name="year", value_name="lf_exp")
+
+(
+  ggplot(top_10, aes("country", "lf_exp", fill="factor(year)")) +
+    geom_col(position="dodge") +
+    labs(title="Top 10 Countries by Life Expectancy Increase From 1996 To 2019", 
+         x="Country", 
+         y="Life Expectancy at Birth (years)", 
+         fill="Year") +
+    theme(axis_text_x=element_text(rotation=45))
+)
+```
+From the plot, it appears that most of the top 10 increased by around 20 years in life expectancy from 1996 to 2019. The amount of increase proportionately speaking also appears roughly the same across the 10 countries, except for Malawi, Rwanda, and Sierra Leone. Of these 3 countries, Malawi and Rwanda had a proportionately larger increase while Sierra Leone had a smaller one.
+  e. Come up with your own plot that will help to understand the role of GDP in the association between alcohol and life expectancy.
+```{python}
+(
+  ggplot(merged, aes("consum", "lf_exp", color="gdp_level")) +
+    geom_point(alpha=0.6) +
+    geom_smooth(method="lm", se=False) +
+    facet_wrap("~year") +
+    scale_color_brewer(type="qual", palette="Dark2") +
+    labs(title="Life Expectancy vs Alcohol Consumption by GDP Level", 
+         x="Alcohol Consumption (litres per capita)",
+         y="Life Expectancy at Birth (years)",
+         color="GDP Level") +
+    theme(axis_text_x=element_text(rotation=45, hjust=1))
+)
+```
+  The plot used for this part is a scatterplot coloured by GDP level, contrasting alcohol consumption per capita and life expectancy at birth, with a linear regression plotted. This is done for each of the three years. This plot shows more details than the one from part b as it allows one to also see the GDP levels. As mentioned in my interpretation for part b, it is possible that the trend of higher alcohol consumption being linked to higher life expectancy are coincidental as they could both be a trait of a more developed country, in other words, a country with higher GDP per capita. This is somewhat confirmed by the plot for this part, as one can see that there is a much less steep trend of higher alcohol consumption lining up with higher life expectancy. It is somewhat noticeable for 1996 for the medium and low GDP legels, but in the 2 later years, this trend is close to gone within each GDP level. 
 
 
 ## Advanced Regression
