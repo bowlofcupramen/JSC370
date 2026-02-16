@@ -41,6 +41,9 @@ import json
 import time
 from plotnine import *
 import warnings
+from pygam import LinearGAM, s, l
+import statsmodels.api as sm
+import matplotlib.pyplot as plt
 warnings.filterwarnings('ignore')
 ```
 
@@ -316,8 +319,48 @@ From the plot, it appears that most of the top 10 increased by around 20 years i
 5. (8 points) Construct a multiple linear regression model to examine the association between life expectancy and alcohol consumption adjusted for GDP per capita, and year. Note you should scale GDP by population to get GDP per capita since the values can be very large. 
 Then fit a gam model where you put a smooth on GDP per capita and alcohol consumption.
 
+```{python}
+merged = merged.dropna()
+X = merged[["year", "gdp", "consum"]].values
+y = merged["lf_exp"].values
+X_const = sm.add_constant(X)
+mlr = sm.OLS(y, X_const).fit()
+print(mlr.summary())
+```
+```{python}
+gam_mod = LinearGAM(
+    l(0) +
+    s(1) +
+    s(2)).fit(X, y)
+print(gam_mod.summary())
+```
+
 Provide the following in your analyses:
 
   a. Summaries of your models, including overall model fit and interpretation of the parameter estimates (linear and non-linear).
+  For the linear model, the constant term is around -302, while the coefficients of the year, GDP, and alcohol consumption terms are 0.1823, 0.0003, and 0.4912 respectively. Based on the test statsitics, non of these values are statistically significant. Based on the R-squared, both adjusted and otherwise (0.484 and 0.481, respectively), the model does not perform too well. 
   b. Plot of the smoothed variables from the gam model and interpret.
+```{python}
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
+# define the variables and colors
+spec = [
+    (1, 1, "GDP per capita ($USD)",  "blue", "Effect of GDP"),
+    (2, 2, "Alcohol Consumption per capita (L)", "red",  "Effect of Alcohol Consumption")
+]
+
+# loop over smooth variables
+skip = True
+for ax, (term, xcol, xlabel, color, title) in zip(axes, spec):
+  XX = gam_mod.generate_X_grid(term=term)
+  x = XX[:, xcol]
+  pd_effect = gam_mod.partial_dependence(term=term, X=XX)
+  _, ci = gam_mod.partial_dependence(term=term, X=XX, width=0.95)
+  ax.plot(x, pd_effect, color=color, lw=2)
+  ax.plot(x, ci, color=color, ls="--", lw=1)
+  ax.set(xlabel=xlabel, ylabel="Partial Effect on Life Expectancy", title=title)
+
+plt.tight_layout()
+plt.show()
+```
+  For the GAM, the pseudo R-squared is about 0.6942, which is much better than the linear regression model. The EDoF for year and GDP per capita are also both statistically significant, while the EDoF for the GDP per capita and alcohol consumption are both relatively high (>10). From the plot, the GDP is indeed quite non-linear, though for the effects of alcohol consumption, even though there are some noticeable non-linearity, the overall plot is very horizontal, and it is possible that the feature could be replaced by a linear one. In terms of effects, GDP does seem to be correlated with higher life expectancy, and this correlated increase is especially steep for lower GDP per capita countries.
