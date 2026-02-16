@@ -1,18 +1,11 @@
 ---
 title: "Homework 2 - Data Scraping, APIs and Advanced Regression"
-format: pdf
+format:
+  html:
+    embed-resources: true
+jupyter: python3
 ---
-
-## Due Date
-
-Sunday February 15, 2026 by 11:59pm.
-
-# Learning Goals
-- Use an API, scrape, wrangle, and get familiar different datasets. 
-- Make visualizations
-- Conduct GAM regression modeling and compare to linear regression
-
-
+David Jiang
 ## Assignment Description
 
 For this assignment, we will be analyzing data on life expectancy and alcohol consumption.
@@ -95,7 +88,8 @@ def get_df_year(url, df, pg, year):
     count += filter_append(data, df)
     if count >= prev:
       prev = count
-      print(count)
+      # count is just to help me track progress
+      # print(count)
     time.sleep(0.1)
 
 pg_expect = requests.get(url_expect + "&date=1996").json()[0]["pages"]
