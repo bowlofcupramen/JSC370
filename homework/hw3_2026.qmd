@@ -1,0 +1,641 @@
+---
+title: "Homework 2 - More APIs, Classification, NLP"
+format:
+  html:
+    embed-resources: true
+jupyter: python3
+---
+David Jiang
+
+```{python}
+#| label: setup
+#| message: false
+#| warning: false
+import pandas as pd
+import numpy as np
+import requests
+from io import StringIO
+import re
+import json
+import time
+from plotnine import *
+import warnings
+from collections import Counter
+import nltk
+from nltk.tokenize import word_tokenize, sent_tokenize
+from nltk.corpus import stopwords
+from nltk.util import ngrams
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('punkt_tab')
+nltk.download('vader_lexicon')
+import statsmodels.api as sm
+from statsmodels.stats.weightstats import ttest_ind
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.metrics import accuracy_score, mean_squared_error, r2_score, confusion_matrix, ConfusionMatrixDisplay, precision_score, recall_score, f1_score, roc_curve, roc_auc_score
+warnings.filterwarnings('ignore')
+```
+
+## NASA API (Part 1)
+1. (3 points) The NASA NeoWs Feed API only allows pulls of 7 days of data at a time, so create a loop to pull all NEOs observed so far this year (i.e. start_date and end_date will be for a week but we want to get all asteroids since January 1, 2026). Your query will pull a list of asteroids based on their closest approach date and will have various attributes. Summarize the number of NEOs you pulled, the how many days had NEOs since January 1 of this year.
+
+```{python}
+BASE_URL = "https://api.nasa.gov/neo/rest/v1/feed?"
+key = "RJSGjfbcI7XdgBhCjJ1iowGpxvXgF4hpktUf2yut"
+```
+```{python}
+data_json = []
+dates = ["2026-01-01", "2026-01-08", "2026-01-15", "2026-01-22", "2026-01-29", "2026-02-05", "2026-02-12", "2026-02-19", "2026-02-26"]
+for i in range(8):
+    URL = BASE_URL + f"start_date={dates[i]}&api_key={key}"
+    print(URL)
+    data_json.append(requests.get(URL, params={"page": "1"}, timeout=30).json())
+    time.sleep(0.1)
+```
+```{python}
+def get_key_info(df, data_json):
+    for req in data_json:
+        neo = req["near_earth_objects"]
+        for day in neo:
+            for meteor in neo[day]:
+                df.append({"date": day, 
+                "id": meteor["neo_reference_id"], 
+                "diam_min_m": meteor["estimated_diameter"]["meters"]["estimated_diameter_min"], 
+                "diam_max_m": meteor["estimated_diameter"]["meters"]["estimated_diameter_max"],
+                "avg_diam_m": np.array([meteor["estimated_diameter"]["meters"]["estimated_diameter_min"], meteor["estimated_diameter"]["meters"]["estimated_diameter_max"]]).mean(),
+                "is_hazard": meteor["is_potentially_hazardous_asteroid"],
+                "velocity_kph": meteor["close_approach_data"][0]["relative_velocity"]["kilometers_per_hour"],
+                "miss_km": meteor["close_approach_data"][0]["miss_distance"]["kilometers"]})
+
+data = []
+get_key_info(data, data_json)
+```
+```{python}
+ids = set()
+dates = set()
+for entry in data:
+    dates.add(entry["date"])
+    ids.add(entry["id"])
+
+print(f"Number of NEOs: {len(ids)}")
+print(f"Number of days with NEOs: {len(dates)}")
+```
+
+**Summary:** The data used was from January 1 to February 26. During this time, there were a total of 915 NEOs and 57 days had NEOs. That is, there were at least one NEO every day.
+
+2. (5 points) Extract information on estimated_diameter, is_potentially_hazardous_asteroid, miss_distance, and relative_velocity. Create a variable for avg_estimated_diameter (take the mean of min and max). Make a summary table of these variables, a correlation heatmap of the numeric variables, and create a stacked barplot of the number of asteroids by day, distinguishing those that are hazardous is_potentially_hazardous_asteroid.
+```{python}
+df = pd.DataFrame(data)
+df["date"] = pd.to_datetime(df["date"])
+df["id"] = df["id"].astype(int)
+df["velocity_kph"] = df["velocity_kph"].astype(float)
+df["miss_km"] = df["miss_km"].astype(float)
+```
+```{python}
+numeric_cols = ['avg_diam_m', 'velocity_kph', 'miss_km']
+# 1. Summary
+print(df[numeric_cols + ['is_hazard']].describe().round(2).to_string())
+```
+```{python}
+corr = df[numeric_cols].corr().round(2)
+corr_long = (
+    corr.reset_index()
+    .melt(id_vars='index', var_name='variable', value_name='correlation')
+    .rename(columns={'index': 'row'})
+)
+(
+    ggplot(corr_long, aes(x='variable', y='row', fill='correlation'))
+    + geom_tile()
+    + geom_text(aes(label='correlation'), size=10)
+    + scale_fill_gradient2(low='tomato', mid='white', high='steelblue', midpoint=0, limits=(-1, 1))
+    + labs(title='Correlation Heatmap', x='', y='')
+    + theme_minimal()
+)
+```
+```{python}
+daily = df.groupby(['date', 'is_hazard']).size().unstack(fill_value=0)
+daily.columns = ['Safe', 'Hazardous']
+daily.index = daily.index.strftime('%b %d')
+fig, ax = plt.subplots(figsize=(8, 4))
+daily.plot(kind='bar', stacked=True, ax=ax, color=['steelblue', 'tomato'])
+ax.set_title('NEOs per Day')
+ax.set_xlabel('Date')
+ax.set_ylabel('Count')
+ax.tick_params(axis='x', rotation=45, labelsize=8)
+ax.xaxis.set_major_locator(MultipleLocator(5))
+plt.tight_layout()
+plt.show()
+```
+
+3. (6 points) Are larger NEOs more hazardous? Are faster NEOs more hazardous? Create two histograms to explore these questions, and conduct two-sample t-tests. Is the relationship between diameter and velocity different between hazardous and non-hazardous NEOs? Create a scatterplot to explore this. Summarize your results.
+```{python}
+haz = df[df["is_hazard"] == True]
+not_haz = df[df["is_hazard"] == False]
+# 1. Histograms
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+axes[0].hist(not_haz['avg_diam_m'], alpha=0.6, label='Safe', bins=15)
+axes[0].hist(haz['avg_diam_m'], alpha=0.6, label='Hazardous',    bins=15)
+axes[0].set_title('Diameter by Hazard Status')
+axes[0].set_xlabel('Avg Diameter (m)')
+axes[0].set_ylabel('Count')
+axes[0].legend()
+axes[1].hist(not_haz['velocity_kph'], alpha=0.6, label='Safe', bins=15)
+axes[1].hist(haz['velocity_kph'],  alpha=0.6, label='Hazardous', bins=15)
+axes[1].set_title('Velocity by Hazard Status')
+axes[1].set_xlabel('Velocity (kph)')
+axes[1].set_ylabel('Count')
+axes[1].legend()
+plt.tight_layout()
+plt.show()
+```
+```{python}
+# 2. Two-sample t-test
+t_diam, p_diam, df_diam = ttest_ind(haz['avg_diam_m'], not_haz['avg_diam_m'])
+t_vel,  p_vel,  df_vel  = ttest_ind(haz['velocity_kph'], not_haz['velocity_kph'])
+
+print("T-Test: Diameter (Hazardous vs Safe)")
+print(f"  Mean hazardous : {haz['avg_diam_m'].mean():.1f} m")
+print(f"  Mean safe      : {not_haz['avg_diam_m'].mean():.1f} m")
+print(f"  t = {t_diam:.3f}, p = {p_diam:.4f}, df = {df_diam:.1f}")
+
+print("T-Test: Velocity (Hazardous vs Safe)")
+print(f"  Mean hazardous : {haz['velocity_kph'].mean():.1f} kph")
+print(f"  Mean safe      : {not_haz['velocity_kph'].mean():.1f} kph")
+print(f"  t = {t_vel:.3f}, p = {p_vel:.4f}, df = {df_vel:.1f}")
+```
+```{python}
+# 3. Scatterplot
+df['Hazardous'] = df['is_hazard'].map({True: 'Hazardous', False: 'Safe'})
+(
+    ggplot(df, aes(x='avg_diam_m', y='velocity_kph', color='Hazardous')) + 
+    geom_point(size=3, alpha=0.8) + 
+    geom_smooth(method='lm', se=False) + 
+    labs(title='Diameter vs Velocity by Hazard Status',
+           x='Avg Diameter (m)', y='Velocity (kph)', color='') + 
+    theme_minimal()
+)
+```
+**Summary:** From both the t-tests (using a 5% significance level) and the scatterplot (with the line of fit), it appears that there is not a significant difference between the diameter and velocity between hazardous and non-hazardous NEOs. From the histograms,  hazardous meteors appear to have larger average diameters, but because of the scale of the graph, the magnitude of this difference is difficult to estimate graphically. As for the velocity by hazard status histogram, due to the large proportion difference, velocity does not appear to be much of an impact on hazard level.
+
+4. (5 points) Split the data into 70% train and 30% test, and fit a logistic regression model (on train) to see if we can predict (on test) whether an asteroid is hazardous based on its attributes (include diameter, velocity, miss distance). Summarize and interpret the results (include a confusion matrix, accuracy, precision, recall, and F1; plot the ROC curve).
+
+```{python}
+feature_cols = ["avg_diam_m", "velocity_kph", "miss_km"]
+
+X = df[feature_cols]
+y = df["is_hazard"]
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3)
+print(f"Training set size: {len(X_train)}")
+print(f"Testing set size: {len(X_test)}")
+```
+```{python}
+X_train_const = sm.add_constant(X_train)
+model = sm.Logit(y_train, X_train_const).fit()
+print(model.summary())
+
+X_test_const = sm.add_constant(X_test)
+pred = model.predict(X_test_const)
+pred_bin = (pred >= 0.5).astype(int)
+
+cm = confusion_matrix(y_test, pred_bin)
+fig, ax = plt.subplots(figsize=(10, 8))
+disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=y.unique())
+disp.plot(ax=ax, cmap='Blues', xticks_rotation=45)
+plt.tight_layout()
+plt.show()
+print(f"Accuracy  : {accuracy_score(y_test, pred_bin):.4f}")
+print(f"Precision : {precision_score(y_test, pred_bin):.4f}")
+print(f"Recall    : {recall_score(y_test, pred_bin):.4f}")
+print(f"F1        : {f1_score(y_test, pred_bin):.4f}")
+
+# ROC Curve
+fpr, tpr, _ = roc_curve(y_test, pred)
+auc = roc_auc_score(y_test, pred)
+
+plt.figure(figsize=(6, 4))
+plt.plot(fpr, tpr, label=f'AUC = {auc:.3f}')
+plt.plot([0, 1], [0, 1], 'k--', label='Random')
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve')
+plt.legend()
+plt.tight_layout()
+plt.show()
+```
+**Summary:** Based on the confusion matrix, all non-hazardous NEOs were correctly classified by the model (precision = 1). However, 15 of the 16 hazardous NEOs were incorrectly classified as non-hazardous. In the real world, this is far worse than misclassifying non-hazardous NEOs since it is better to be overprepared than underprepared. This is also shown in the low recal value of 0.0625. Despite this, the overall accuracy remains high at 0.9518 due to the large proportion difference between hazardous and non-hazardous NEOs. The AUC being at 0.93 indicates that the model performs quite well.
+
+5. (5 points) Repeat 4 but using random forest. Summarize and include a comparison of your results in 4.
+```{python}
+results = []
+for mf in ['sqrt', 1/3, 0.5]:
+    for msl in [1, 5, 10]:
+        rf = RandomForestClassifier(
+            max_features=mf,
+            min_samples_leaf=msl,
+            n_estimators=200, 
+            oob_score=True
+        )
+        rf.fit(X_train, y_train)
+        results.append({
+            'max_features': mf, 'min_samples_leaf': msl,
+            'oob_accuracy': rf.oob_score_
+        })
+
+tune_df = pd.DataFrame(results).sort_values('oob_accuracy', ascending=False)
+print(tune_df.to_string(index=False))
+```
+
+```{python}
+# Fit the best model with n_estimators=500
+best = tune_df.iloc[0]
+print(f"Best parameters: max_features={best["max_features"]}, min_samples_leaf={best["min_samples_leaf"]}")
+
+rf_class = RandomForestClassifier(
+    max_features=best['max_features'],
+    min_samples_leaf=best["min_samples_leaf"],
+    oob_score=True,
+    random_state=65,
+    n_estimators=500
+)
+rf_class.fit(X_train, y_train)
+```
+```{python}
+pred_rf = rf_class.predict(X_test)
+pred_rf_bin = (pred >= 0.5).astype(int)
+
+cm_rf = confusion_matrix(y_test, pred_rf_bin)
+fig, ax = plt.subplots(figsize=(10, 8))
+disp = ConfusionMatrixDisplay(confusion_matrix=cm_rf, display_labels=y.unique())
+disp.plot(ax=ax, cmap='Blues', xticks_rotation=45)
+plt.tight_layout()
+plt.show()
+print(f"Accuracy  : {accuracy_score(y_test, pred_rf_bin):.4f}")
+print(f"Precision : {precision_score(y_test, pred_rf_bin):.4f}")
+print(f"Recall    : {recall_score(y_test, pred_rf_bin):.4f}")
+print(f"F1        : {f1_score(y_test, pred_rf_bin):.4f}")
+
+# ROC Curve
+fpr, tpr, _ = roc_curve(y_test, pred_rf)
+auc = roc_auc_score(y_test, pred_rf)
+
+plt.figure(figsize=(6, 4))
+plt.plot(fpr, tpr, label=f'AUC = {auc:.3f}')
+plt.plot([0, 1], [0, 1], 'k--', label='Random')
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve')
+plt.legend()
+plt.tight_layout()
+plt.show()
+```
+**Summary:** The random forest performs more or less identically to the logistics regression. However, the AUC value seen in the ROC plot indicates that it performs worse. And, from the plot's shape as well, the random forest could do better.
+
+## CFPB API (Part 2)
+
+6. (3 points) Use the API to get consumer complaint narratives (i.e. has_narrative) from the last 3 months (i.e. date_received_min is November 1, 2025) across all product categories. I suggest using the csv format. Please note this is a very large dataset so may take some time to query (you can use a longer timeout). Once you have pulled the data, summarize the dimensions and variables. Create a bar chart of complaint counts by product category.
+
+```{python}
+URL2 = "https://www.consumerfinance.gov/data-research/consumer-complaints/search/api/v1/?format=csv&date_received_min=2025-11-01&has_narrative=true"
+data2 = requests.get(URL2, timeout=6000)
+```
+```{python}
+df_c = pd.read_csv(StringIO(data2.text))
+```
+```{python}
+print("Number of rows:", df_c.shape[0])
+print("Number of columns:", df_c.shape[1])
+print("\nColumns in the dataset:")
+print(df_c.columns.tolist())
+print("\nData info:")
+print(df_c.info())
+print(f"\nComplaint counts by category:\n{df_c['Product'].value_counts()}")
+plt.figure(figsize=(10,6))
+df_c['Product'].value_counts().plot(kind='bar', color='skyblue')
+plt.title('Consumer Complaint Counts by Product')
+plt.xlabel('Product Category')
+plt.ylabel('Number of Complaints')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+```
+
+7. (2 points) Tokenize the complaints (consumer complaint narrative) and count the number of tokens. Make a plot of the top 20 tokens. Summarize.
+
+```{python}
+def tokenize_text(text):
+    if pd.isna(text):
+        return []
+    return word_tokenize(text.lower())
+
+all_tokens = []
+for text in df_c['Consumer complaint narrative']:
+    all_tokens.extend(tokenize_text(text))
+
+# Count tokens
+token_counts = Counter(all_tokens)
+top_20 = token_counts.most_common(20)
+
+# Create dataframe for plotting
+top_20_df = pd.DataFrame(top_20, columns=['word', 'count'])
+(
+    ggplot(top_20_df, aes(x='reorder(word, count)', y='count')) +
+    geom_bar(stat='identity', fill='steelblue') +
+    coord_flip() +
+    labs(x='Word', y='Frequency', title='Top 20 Most Frequent Words') +
+    theme_minimal() +
+    theme(figure_size=(10, 6))
+)
+```
+**Summary:** The top 20 most common tokens include a lot of punctuations, as well as stopwords like "the" Notably, the most common token is "XXXX". Aside from the stopwords and "XXXX", there are also two notable useful words being "credit" and "account".
+
+8. (3 points) Remove stopwords, including numeric tokens, xxxx combinations, and customize to remove any other words that look strange. After cleaning, what words appear as the most frequent? Create a plot of the 20 most common complaint tokens in your cleaned data and summarize.
+
+```{python}
+stop_words = set(stopwords.words('english'))
+filtered_tokens = [
+    token for token in all_tokens
+    if token not in stop_words
+    and not re.match(r'^/d+$', token)
+    and not re.match(r'x+', token)
+    and len(token) > 2  # Remove very short tokens
+    and token.isalpha()  # Keep only alphabetic tokens
+]
+rm_tokens = set(all_tokens) - set(filtered_tokens)
+filtered_counts = Counter(filtered_tokens)
+top_20_filtered = filtered_counts.most_common(20)
+
+# Create dataframe for plotting
+top_20_filtered_df = pd.DataFrame(top_20_filtered, columns=['word', 'count'])
+(
+    ggplot(top_20_filtered_df, aes(x='reorder(word, count)', y='count')) +
+    geom_bar(stat='identity', fill='steelblue') +
+    coord_flip() +
+    labs(x='Word', y='Frequency', title='Top 20 Most Frequent Words (Stopwords Removed)') +
+    theme_minimal() +
+    theme(figure_size=(10, 6))
+)
+```
+**Summary:** All tokens that are stopwords, numeric, have less than 3 letters, or is some sequence of just "x"s have been removed.
+
+9. (10 points) Use Latent Dirichlet Allocation (LDA) topic modeling to discover topics in the complaint narratives. First, use perplexity and log-likelihood on a held-out sample of 50,000 to evaluate different numbers of topics (e.g., 2 to 10) and select an appropriate number. Plot perplexity and log-likelihood as a function of the number of topics. Then fit an LDA model with your chosen number of topics. Display the top 10 words for each topic. Do the discovered topics align with the actual product categories? Create a visualization to compare. Summarize and interpret your findings.
+
+```{python}
+df_text = df_c['Consumer complaint narrative'].dropna()
+
+rem_text, heldout_text = train_test_split(df_text, test_size=50000, random_state=42)
+
+vectorizer = CountVectorizer(
+    stop_words=list(rm_tokens),
+    max_df=0.95,
+    min_df=10
+)
+X_text = vectorizer.fit_transform(heldout_text)
+```
+```{python}
+topic_range = range(2, 11, 2)
+perplexities = []
+log_likelihoods = []
+for n_topics in topic_range:
+    print(n_topics)
+    lda = LatentDirichletAllocation(
+        n_components=n_topics,
+        max_iter=10,
+        random_state=42
+    )
+    lda.fit(X_text)
+    perplexities.append(lda.perplexity(X_text))
+    log_likelihoods.append(lda.score(X_text))
+```
+```{python}
+# Plot results
+plt.figure(figsize=(12,5))
+plt.subplot(1,2,1)
+plt.plot(topic_range, perplexities, marker='o')
+plt.title('Perplexity vs Number of Topics')
+plt.xlabel('Number of Topics')
+plt.ylabel('Perplexity')
+plt.subplot(1,2,2)
+plt.plot(topic_range, log_likelihoods, marker='o', color='orange')
+plt.title('Log-Likelihood vs Number of Topics')
+plt.xlabel('Number of Topics')
+plt.ylabel('Log-Likelihood')
+plt.tight_layout()
+plt.show()
+```
+```{python}
+lda = LatentDirichletAllocation(
+    n_components=4,
+    max_iter=10,
+    random_state=42
+)
+lda.fit(X_text)
+```
+```{python}
+feature_names = vectorizer.get_feature_names_out()
+def get_topic_df(model, feature_names, n_top_words=10):
+    rows = []
+    for topic_idx, topic in enumerate(model.components_):
+        top_indices = topic.argsort()[:-n_top_words - 1:-1]
+        for rank, idx in enumerate(top_indices):
+            rows.append({
+                'topic': f'Topic {topic_idx + 1}',
+                'word': feature_names[idx],
+                'weight': topic[idx],
+                'rank': rank
+            })
+    return pd.DataFrame(rows)
+
+topic_df = get_topic_df(lda, feature_names, 10)
+for topic in topic_df['topic'].unique():
+    words = topic_df[topic_df['topic'] == topic]['word'].tolist()
+    print(f"{topic}: {', '.join(words)}")
+(
+    ggplot(topic_df, aes(x='reorder(word, weight)', y='weight')) +
+    geom_bar(stat='identity', fill='steelblue') +
+    coord_flip() +
+    facet_wrap('~topic', scales='free_y', ncol=3) +
+    labs(x='Word', y='Weight', title='Top Words per Topic (LDA)') +
+    theme_minimal() +
+    theme(figure_size=(14, 8), strip_text=element_text(size=10))
+)
+```
+**Summary:** I chose to use 4 topics because it had the best balance between perplexity and log-likelihood, being situated at the "elbow" for both plots. The topics do align. Although because of the high similarity between products, it is hard to distinguish which topic corresponds to which product. 
+
+10. (5 points) Use the vader lexicon to conduct sentiment analysis on the word tokens to determine if consumer complaints express positive, neutral, or negative sentiments. Create a histogram of the sentiment scores, and make a barplot to show the counts of tokens by sentiment category. Make another barplot to compare sentiment category counts by product categories. Make another barplot to show which words have top positive sentiment scores and which words have most negative sentiment scores. Summarize and interpret your results.
+
+```{python}
+sia = SentimentIntensityAnalyzer()
+token_sentiments = []
+for token in filtered_tokens:
+    score = sia.polarity_scores(token)['compound']
+    token_sentiments.append((token, score))
+
+sentiment_data = []
+for token, score in token_sentiments:
+    if score >= 0.05:
+        category = 'pos'
+    elif score <= -0.05:
+        category = 'neg'
+    else:
+        category = 'ntl'
+    sentiment_data.append((token, score, category))
+
+sentiment_df = pd.DataFrame(sentiment_data, columns=['token','score','sentiment'])
+plt.figure(figsize=(8,5))
+plt.hist(sentiment_df['score'], bins=50)
+plt.title('Histogram of VADER Compound Scores for Tokens')
+plt.xlabel('Compound Score')
+plt.ylabel('Token Count')
+plt.show()
+```
+```{python}
+category_counts = sentiment_df['sentiment'].value_counts()
+plt.figure(figsize=(6,4))
+plt.bar(category_counts.index, category_counts.values, color=['gray','green','red'])
+plt.title('Token Counts by Sentiment Category')
+plt.xlabel('Sentiment')
+plt.ylabel('Count')
+plt.show()
+```
+```{python}
+def get_sentiment(text):
+    tokens = word_tokenize(text.lower())
+    scores = [sia.polarity_scores(t)['compound'] for t in tokens]
+    if not scores:
+        return 'neutral'
+    avg_score = sum(scores)/len(scores)
+    if avg_score >= 0.05:
+        return 'pos'
+    elif avg_score <= -0.05:
+        return 'neg'
+    else:
+        return 'ntl'
+
+df_c['narrative_sentiment'] = df_c['Consumer complaint narrative'].fillna('').apply(get_sentiment)
+
+prod_sentiment_counts = df_c.groupby(['Product','narrative_sentiment']).size().unstack(fill_value=0)
+
+prod_sentiment_counts.plot(kind='bar', stacked=True, figsize=(12,6), color=['green','gray','red'])
+plt.title('Sentiment Counts by Product Category')
+plt.xlabel('Product')
+plt.ylabel('Number of Complaints')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+```
+```{python}
+# Top 10 positive
+top_positive = sentiment_df[sentiment_df['sentiment']=='pos'].groupby('token')['score'].mean().sort_values(ascending=False).head(10)
+
+# Top 10 negative
+top_negative = sentiment_df[sentiment_df['sentiment']=='neg'].groupby('token')['score'].mean().sort_values().head(10)
+
+plt.figure(figsize=(12,5))
+plt.subplot(1,2,1)
+plt.bar(top_positive.index, top_positive.values, color='green')
+plt.title('Top Positive Words by VADER Score')
+plt.xticks(rotation=45, ha='right')
+plt.subplot(1,2,2)
+plt.bar(top_negative.index, top_negative.values, color='red')
+plt.title('Top Negative Words by VADER Score')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+```
+**Summary:** Based on the histogram, the distribution of the sentiment score appears to be roughly trimodal, with a very large peak just slightly under 0, a much smaller one just below 0.4, and another, extremely small one around -0.4. Then looking at the category counts, this roughly aligns with the very large bin in the histogram around 0, as neutral has the largest category by a big margin. The large number of neutral tokens indicate that for the most part, the complaints use words that perhaps are not inherently negative. Judging from the token counts of positive, negative, and neutral words, if each sentence has roughly the same proportion as their counts, then it makes sense that the vast majority of narratives are neutral. The top 10 positive and negative tokens do indeed make sense.
+
+11.  (2 points) Conduct sentence-level tokenization, summarize the number of sentences, and the average number of sentences by complaint.
+
+```{python}
+def get_sentence_stats(text):
+    if pd.isna(text):
+        return {'num_sentences': 0, 'avg_sentence_length': 0}
+
+    sentences = sent_tokenize(text)
+    num_sentences = len(sentences)
+    if num_sentences == 0:
+        return {'num_sentences': 0, 'avg_sentence_length': 0}
+
+    # Calculate average sentence length in words
+    sentence_lengths = [len(word_tokenize(sent)) for sent in sentences]
+    avg_length = np.mean(sentence_lengths)
+
+    return {'num_sentences': num_sentences, 'avg_sentence_length': avg_length}
+
+# Apply to all transcriptions
+sentence_stats = df_c["Consumer complaint narrative"].apply(get_sentence_stats)
+df_c['num_sentences'] = sentence_stats.apply(lambda x: x['num_sentences'])
+df_c['avg_sentence_length'] = sentence_stats.apply(lambda x: x['avg_sentence_length'])
+
+# Summary statistics
+print("Sentence Statistics Summary:")
+print(df_c[['num_sentences', 'avg_sentence_length']].describe())
+```
+
+12. (4 points) Conduct sentiment analysis of the sentence tokens. Like above, visualize the histogram of the sentiment scores, categorize sentiments into negative, neutral, positive and visualize counts with a barplot as well as a barplot by product categories. Interpret, summarize, and discuss differences from word token sentiment analysis in question 10.
+
+```{python}
+sentence_data = []
+for text in df_text:
+    sentences = sent_tokenize(text)  # split into sentences
+    for sent in sentences:
+        score = sia.polarity_scores(sent)['compound']
+        if score >= 0.05:
+            category = 'pos'
+        elif score <= -0.05:
+            category = 'neg'
+        else:
+            category = 'ntl'
+        sentence_data.append((sent, score, category))
+
+sentiment_sent_df = pd.DataFrame(sentence_data, columns=['sentence','score','sentiment'])
+plt.figure(figsize=(8,5))
+plt.hist(sentiment_sent_df['score'], bins=50)
+plt.title('Histogram of VADER Compound Scores for Sentences')
+plt.xlabel('Compound Score')
+plt.ylabel('Number of Sentences')
+plt.show()
+```
+```{python}
+category_counts = sentiment_sent_df['sentiment'].value_counts()
+plt.figure(figsize=(6,4))
+plt.bar(category_counts.index, category_counts.values, color=['red','gray','green'])
+plt.title('Sentence Counts by Sentiment Category')
+plt.xlabel('Sentiment')
+plt.ylabel('Count')
+plt.show()
+```
+```{python}
+def get_sentence_sentiment(text):
+    sentences = sent_tokenize(text)
+    scores = [sia.polarity_scores(s)['compound'] for s in sentences]
+    if not scores:
+        return 'ntl'
+    avg_score = sum(scores)/len(scores)
+    if avg_score >= 0.05:
+        return 'pos'
+    elif avg_score <= -0.05:
+        return 'neg'
+    else:
+        return 'ntl'
+
+# Apply to dataframe
+df_c['sentence_sentiment'] = df_c['Consumer complaint narrative'].fillna('').apply(get_sentence_sentiment)
+# Count by Product × Sentiment
+prod_sentiment_counts = df_c.groupby(['Product','sentence_sentiment']).size().unstack(fill_value=0)
+
+prod_sentiment_counts.plot(kind='bar', stacked=True, figsize=(12,6), color=['red','gray','green'])
+plt.title('Sentence-Level Sentiment Counts by Product Category')
+plt.xlabel('Product')
+plt.ylabel('Number of Complaints')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+```
+**Summary:** Compared to the word token sentiment analysis, the sentence level sentiment makes more sense as its most common category is negative, and it is much more balanced across the three categories. This is likely due to the lack of context when only considering word tokens. However, for sentence sentiment analysis, the context of each word is considered, making the sentiment more accurate. 
