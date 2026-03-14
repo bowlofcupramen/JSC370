@@ -1,0 +1,637 @@
+---
+title: "JSC370 2026: Midterm Project"
+format:
+  html:
+    embed-resources: true
+jupyter: python3
+execute:
+  eval: true
+---
+
+<style>
+figcaption {
+  text-align: center;
+  font-weight: bold;
+}
+</style>
+David Jiang
+```{python}
+#| label: setup
+#| message: false
+#| warning: false
+#| echo: false
+import pandas as pd
+import numpy as np
+import requests
+from io import StringIO
+import re
+import json
+import time
+from plotnine import *
+import warnings
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from statsmodels.stats.weightstats import ttest_ind
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import matplotlib.gridspec as gridspec
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, mean_squared_error, r2_score, confusion_matrix, ConfusionMatrixDisplay, precision_score, recall_score, f1_score, roc_curve, roc_auc_score
+warnings.filterwarnings('ignore')
+```
+```{python}
+#| message: false
+#| warning: false
+#| echo: false
+
+# This block is to obtain the indicator list, to find which indicators to viable to use
+BASE_URL = 'https://ghoapi.azureedge.net/api/'
+
+# Features of interest
+# Note that these are the only features of interest I found that I could retrieve data for using the API
+foi = ['Number of new HIV infections', 'Domestic general government health expenditure (GGHE-D) as percentage of general government expenditure (GGE) (%)']
+
+# Indicators in JSON format
+inds_json = requests.get(BASE_URL + 'Indicator', params={"page": "1"}, timeout=30).json()
+```
+```{python}
+#| message: false
+#| warning: false
+#| echo: false
+
+# This block is to obtain the codes of the indicators of interest
+
+#Indicators
+inds = pd.DataFrame(list(inds_json.values())[1])
+
+#Information on features of interest
+fois = inds[inds['IndicatorName'].isin(foi)]
+
+# Indicator codes for the indicators of interest
+foi_codes = fois['IndicatorCode']
+```
+```{python}
+#| message: false
+#| warning: false
+#| echo: false
+
+# This block is to perform the API calls to obtain the data on the features of interest
+jsons = []
+for code in foi_codes:
+    req = requests.get(BASE_URL + code, timeout=300)
+    assert(req.status_code == 200)
+    jsons.append(req.json())
+    time.sleep(0.1)
+```
+```{python}
+#| message: false
+#| warning: false
+#| echo: false
+
+# This block is to wrangle the API data
+drop_cols = ['Id', 'SpatialDimType', 'TimeDimType', 'ParentLocationCode', 'Dim1Type', 'Dim1', 'Dim2Type', 'Dim2', 'Dim3Type', 'Dim3', 'DataSourceDimType', 'DataSourceDim', 'Value', 'Low', 'High', 'Comments', 'Date', 'TimeDimensionValue', 'TimeDimensionBegin', 'TimeDimensionEnd']
+
+dfs = {}
+for i in range(len(jsons)):
+    df = pd.DataFrame(list(pd.DataFrame(jsons[i])['value'])).drop(drop_cols, axis=1)
+    indicator = df['IndicatorCode'].unique()[0]
+    dfs[indicator] = df.rename(columns={"SpatialDim": "country", "ParentLocation": "region", "TimeDim": "year"}).drop(['IndicatorCode'], axis=1)
+dfs['HIV_0000000026'].rename(columns={"NumericValue": "new_cases"}, inplace=True)
+dfs['GHED_GGHE-DGGE_SHA2011'].rename(columns={"NumericValue": "health_expense_percent"}, inplace=True)
+df = pd.merge(dfs['HIV_0000000026'], dfs['GHED_GGHE-DGGE_SHA2011'], on=['country', 'region', 'year'], how='left')
+```
+```{python}
+#| message: false
+#| warning: false
+#| echo: false
+
+# This block is to parse and wrangle the CSV data
+df_doc = pd.read_csv("./doctors_10k.csv")
+df_nurse = pd.read_csv("./nursery_midwife_10k.csv")
+df_pharm = pd.read_csv("./pharmacists_10k.csv")
+csv_dfs = [df_doc, df_nurse, df_pharm]
+drop_cols = ['ValueType', 'ParentLocationCode', "Location type", "Location", 'Period type', 'IsLatestYear', 'Dim1', 'Dim2', 'Dim3', 'Dim1ValueCode', 'Dim2ValueCode', 'Dim3ValueCode', 'Dim1 type', 'Dim2 type', 'Dim3 type', 'DataSourceDimValueCode', 'DataSource', 'FactValueNumericPrefix', 'FactValueUoM', 'FactValueNumeric', 'FactValueNumericLow', 'FactValueNumericLowPrefix', 'FactValueNumericHigh', 'FactValueNumericHighPrefix', 'DateModified', 'Language', 'FactComments', 'FactValueTranslationID', 'Indicator']
+
+dfs = {}
+for df_csv in csv_dfs:
+    cleaned = df_csv.drop(drop_cols, axis=1)
+    indicator = cleaned['IndicatorCode'].unique()[0]
+    dfs[indicator] = cleaned.rename(columns={"SpatialDimValueCode": "country", "ParentLocation": "region", "Period": "year"}).drop(['IndicatorCode'], axis=1)
+
+# HWF_0001 doctors, 0006 nurses/midwives, 0014 pharmacists
+dfs['HWF_0001'].rename(columns={"Value": "doctor_10k"}, inplace=True)
+dfs['HWF_0006'].rename(columns={"Value": "nurse_10k"}, inplace=True)
+dfs['HWF_0014'].rename(columns={"Value": "pharm_10k"}, inplace=True)
+for new_df in dfs:
+    df = pd.merge(df, dfs[new_df], on=['country', 'region', 'year'], how='left')
+```
+## Introduction
+The dataset used is the World Health Organization's (WHO) Global Health Observatory's (GBO) data. The focus of the data obtained from this dataset will be on HIV data, health personnel data, and economic data, specifically economic data as a whole and for health/medical related uses. The question is whether health/medical spendings and personnel affect the spread of HIV, and if so, by how much. The hypotheses is that these factors do indeed affect the spread of HIV, especially the spendings and personnel counts. 
+
+## Methods
+First, a general list of indicators were queried using WHO's GBO's API. Then, the list was inspected and indicators useful for analysing the key question were selected.
+The data for number of new HIV infections and domestic general government health expenditure as percentage of general government expenditure were obtained directly from WHO's GBO via the API. However, API queries for other indicators of interest responded successfully (status code 200), but contained no data. As such, the information has been retrieved in the form of CSV files.
+
+The data's features were then inspected, and all unnecessary columns and columns with no data were dropped, leaving only the country, region, year, and value (e.g. number of new cases of HIV). Note that the regions include but are not the same as the continents. Specifically, the regions include: Easter Mediterranean, Africa, Europe, Americas, Western Pacific, and South-East Asia.
+
+## Preliminary Results
+To get a rough idea of the amount of missing data, Figure 1 was generated. Based on Figure 1, There are quite a lot of missing values, with there being around 40-50% of the entries being missing for the health personnel. On top of that, there are around 26% of entries missing the new HIV cases value. With this in mind, I then checked the missing values based on year instead, which produced the result in Figure 2. From Figure 2, it can be seen that years 1990-1999 have extremely high proportion of missing, plus the expenditure values for 2024. With this in mind, it was decided that the years 1990-1999 and 2024 would be dropped.
+Since it is impossible to analyze the years where a country has no data on the number of new cases, entries with no data on new cases were dropped. 
+
+```{python}
+#| message: false
+#| warning: false
+#| echo: false
+#| fig-cap: "Figure 1: Missing entries for each feature"
+
+variables = [
+    "New HIV Cases",
+    "Health Exp. (% Gov.)",
+    "Doctors per 10 000",
+    "Nurses & Midwives per 10 000",
+    "Pharmacists per 10 000"
+]
+cols = ["new_cases", "health_expense_percent", "doctor_10k", "nurse_10k", "pharm_10k"]
+n_missing = [df[c].isna().sum() for c in cols]
+p_missing = [f"{100 * df[c].isna().sum() / len(df):.1f}%" for c in cols]
+
+fig, ax = plt.subplots(figsize=(8, 2.2))
+ax.axis("off")
+
+table = ax.table(
+    cellText=list(zip(variables, n_missing, p_missing)),
+    colLabels=["Feature", "Missing Entries Count", "Missing Entries in Percent (%)"],
+    loc="center",
+    cellLoc="center",
+)
+
+table.auto_set_font_size(False)
+table.set_fontsize(10)
+table.scale(1, 1.6)
+
+for col in range(3):
+    cell = table[0, col]
+    cell.set_facecolor("#2c2c2c")
+    cell.set_text_props(color="white", fontweight="bold")
+
+for row in range(1, len(variables) + 1):
+    bg = "#e4e4e4" if row % 2 == 0 else "white"
+    for col in range(3):
+        table[row, col].set_facecolor(bg)
+        table[row, col].set_edgecolor("#cccccc")
+
+for row in range(1, len(variables) + 1):
+    table[row, 0].get_text().set_ha("left")
+
+plt.tight_layout()
+plt.show()
+```
+```{python}
+#| warning: false
+#| message: false
+#| echo: false
+#| fig-cap: "Figure 2: Fraction of missing entries for each year"
+
+cols = ["new_cases", "health_expense_percent", "doctor_10k", "nurse_10k", "pharm_10k"]
+col_labels = ["New HIV Cases", "Health Exp. (% Gov.)", "Doctors / 10k", "Nurses / 10k", "Pharmacists / 10k"]
+
+years = sorted(df["year"].unique())
+cell_data = []
+for year in years:
+    sub = df[df["year"] == year]
+    row = [str(year)] + [str(sub[c].isna().sum()) for c in cols]
+    cell_data.append(row)
+
+n_cols = len(col_labels) + 1
+fig, ax = plt.subplots(figsize=(10, len(years) * 0.38 + 0.8))
+ax.axis("off")
+
+table = ax.table(
+    cellText=cell_data,
+    colLabels=["Year"] + col_labels,
+    loc="center",
+    cellLoc="center",
+)
+
+table.auto_set_font_size(False)
+table.set_fontsize(9)
+table.scale(1, 1.5)
+
+for col in range(n_cols):
+    cell = table[0, col]
+    cell.set_facecolor("#2c2c2c")
+    cell.set_text_props(color="white", fontweight="bold")
+
+for row_idx, year in enumerate(years):
+    bg = "#f2f2f2" if row_idx % 2 == 0 else "white"
+    sub = df[df["year"] == year]
+    for col_idx in range(n_cols):
+        cell = table[row_idx + 1, col_idx]
+        cell.set_edgecolor("#cccccc")
+        cell.set_facecolor(bg)
+
+plt.tight_layout()
+plt.show()
+```
+After checking the proportion of data still missing, Figures 3, 4, and 5 reveal that the main issue in the high amount of missing data for the features remain. Figure 5 in particular shows the higher number of missing data in Africa.
+```{python}
+#| warning: false
+#| message: false
+#| echo: false
+
+# Drop 1990-1999 and 2024 due to high number of missing entries
+df = df[~df['year'].between(1990, 1999) & (df['year'] != 2024)]
+df.dropna(subset=['new_cases'], inplace=True)
+```
+```{python}
+#| warning: false
+#| message: false
+#| echo: false
+#| fig-cap: "Figure 3: Missing entries for each feature, after dropping entries with missing new HIV cases, as well as filtering for years 2000-2023"
+
+variables = [
+    "New HIV Cases",
+    "Health Exp. (% Gov.)",
+    "Doctors per 10 000",
+    "Nurses & Midwives per 10 000",
+    "Pharmacists per 10 000"
+]
+cols = ["new_cases", "health_expense_percent", "doctor_10k", "nurse_10k", "pharm_10k"]
+n_missing = [df[c].isna().sum() for c in cols]
+p_missing = [f"{100 * df[c].isna().sum() / len(df):.1f}%" for c in cols]
+
+fig, ax = plt.subplots(figsize=(8, 2.2))
+ax.axis("off")
+
+table = ax.table(
+    cellText=list(zip(variables, n_missing, p_missing)),
+    colLabels=["Feature", "Missing Entries Count", "Missing Entries in Percent (%)"],
+    loc="center",
+    cellLoc="center",
+)
+
+table.auto_set_font_size(False)
+table.set_fontsize(10)
+table.scale(1, 1.6)
+
+for col in range(3):
+    cell = table[0, col]
+    cell.set_facecolor("#2c2c2c")
+    cell.set_text_props(color="white", fontweight="bold")
+
+for row in range(1, len(variables) + 1):
+    bg = "#e4e4e4" if row % 2 == 0 else "white"
+    for col in range(3):
+        table[row, col].set_facecolor(bg)
+        table[row, col].set_edgecolor("#cccccc")
+
+for row in range(1, len(variables) + 1):
+    table[row, 0].get_text().set_ha("left")
+
+plt.tight_layout()
+plt.show()
+```
+```{python}
+#| warning: false
+#| message: false
+#| echo: false
+#| fig-cap: "Figure 4: Fraction of missing entries for each year, after dropping entries with missing new HIV cases, as well as filtering for years 2000-2023"
+
+cols = ["new_cases", "health_expense_percent", "doctor_10k", "nurse_10k", "pharm_10k"]
+col_labels = ["New HIV Cases", "Health Exp. (% Gov.)", "Doctors / 10k", "Nurses / 10k", "Pharmacists / 10k"]
+
+years = sorted(df["year"].unique())
+cell_data = []
+for year in years:
+    sub = df[df["year"] == year]
+    row = [str(year)] + [str(sub[c].isna().sum()) for c in cols]
+    cell_data.append(row)
+
+n_cols = len(col_labels) + 1
+fig, ax = plt.subplots(figsize=(10, len(years) * 0.38 + 0.8))
+ax.axis("off")
+
+table = ax.table(
+    cellText=cell_data,
+    colLabels=["Year"] + col_labels,
+    loc="center",
+    cellLoc="center",
+)
+
+table.auto_set_font_size(False)
+table.set_fontsize(9)
+table.scale(1, 1.5)
+
+for col in range(n_cols):
+    cell = table[0, col]
+    cell.set_facecolor("#2c2c2c")
+    cell.set_text_props(color="white", fontweight="bold")
+
+for row_idx, year in enumerate(years):
+    bg = "#f2f2f2" if row_idx % 2 == 0 else "white"
+    sub = df[df["year"] == year]
+    for col_idx in range(n_cols):
+        cell = table[row_idx + 1, col_idx]
+        cell.set_edgecolor("#cccccc")
+        cell.set_facecolor(bg)
+
+plt.tight_layout()
+plt.show()
+```
+```{python}
+#| warning: false
+#| message: false
+#| echo: false
+#| fig-cap: "Figure 5: Number of missing entries for each region, for each feature"
+cols = ["new_cases", "health_expense_percent", "doctor_10k", "nurse_10k", "pharm_10k"]
+col_labels = ["New HIV Cases", "Health Exp. (% Gov.)", "Doctors / 10k", "Nurses / 10k", "Pharmacists / 10k"]
+
+regions = sorted(df["region"].dropna().unique())
+cell_data = []
+for region in regions:
+    sub = df[df["region"] == region]
+    cell_data.append([region] + [str(sub[c].isna().sum()) for c in cols])
+
+n_cols = len(col_labels) + 1
+fig, ax = plt.subplots(figsize=(10, len(regions) * 0.38 + 0.8))
+ax.axis("off")
+
+table = ax.table(
+    cellText=cell_data,
+    colLabels=["Region"] + col_labels,
+    loc="center",
+    cellLoc="center",
+)
+
+table.auto_set_font_size(False)
+table.set_fontsize(9)
+table.scale(1, 1.5)
+
+for col in range(n_cols):
+    cell = table[0, col]
+    cell.set_facecolor("#2c2c2c")
+    cell.set_text_props(color="white", fontweight="bold")
+
+for row_idx, region in enumerate(regions):
+    bg = "#f2f2f2" if row_idx % 2 == 0 else "white"
+    sub = df[df["region"] == region]
+    for col_idx in range(n_cols):
+        cell = table[row_idx + 1, col_idx]
+        cell.set_edgecolor("#cccccc")
+        cell.set_facecolor(bg)
+        if col_idx == 0:
+            cell.get_text().set_ha("left")
+
+plt.tight_layout()
+plt.show()
+```
+I then decided to fit several models to check whether any of the features could be dropped due to low significance. The results are shown in Figure 6. We can see that when any of the personnel features are dropped, government health expenses becomes no longer significant at the 0.05 level. However, in the full model, all features appear to be significant at the 0.05 level. Comparing the r-squared, there does not appear to be any significant difference for any of the models. Furthermore, in the last model, the one with only personnel data, both the nurse/midwives and pharmacist features are no longer significant at the 0.05 level. 
+```{python}
+#| warning: false
+#| message: false
+#| echo: false
+#| fig-cap: "Figure 6: Tables comparing the performance and significance of 5 different models, each with a different feature excluded except for the first."
+
+# This block is to compare the performance of models with and without certain features, to see if any of them are not statistically significant
+features  = ["health_expense_percent", "doctor_10k", "nurse_10k", "pharm_10k"]
+drop_cols = ["doctor_10k", "nurse_10k", "pharm_10k", "health_expense_percent"]
+
+models = {"All features": features}
+for col in drop_cols:
+    models[f"Drop {col}"] = [f for f in features if f != col]
+
+clean = df.dropna(subset=["new_cases"] + features)
+
+fits = {}
+for name, feats in models.items():
+    formula = "new_cases ~ " + " + ".join(feats)
+    fits[name] = smf.ols(formula, data=clean).fit()
+
+fig, axes = plt.subplots(len(fits), 1, figsize=(10, len(fits) * 2.4))
+fig.suptitle("Linear Regression Results", fontweight="bold", fontsize=12, y=1.01)
+
+for ax, (name, fit) in zip(axes, fits.items()):
+    ax.axis("off")
+
+    coef_df = pd.DataFrame({
+        "Term":    fit.params.index,
+        "Coef":    fit.params.values,
+        "Std Err": fit.bse.values,
+        "t":       fit.tvalues.values,
+        "p-value": fit.pvalues.values
+    })
+
+    def fmt(v): return f"{v:.4f}"
+    cell_text = [
+        [row["Term"], fmt(row["Coef"]), fmt(row["Std Err"]),
+         fmt(row["t"]), fmt(row["p-value"])]
+        for _, row in coef_df.iterrows()
+    ]
+
+    col_labels = ["Term", "Coef", "Std Err", "t", "p-value"]
+    table = ax.table(cellText=cell_text, colLabels=col_labels,
+                     loc="center", cellLoc="center")
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1, 1.5)
+
+    for col in range(len(col_labels)):
+        table[0, col].set_facecolor("#2c2c2c")
+        table[0, col].set_text_props(color="white", fontweight="bold")
+
+    for row in range(1, len(cell_text) + 1):
+        bg = "#f2f2f2" if row % 2 == 0 else "white"
+        p  = float(coef_df.iloc[row - 1]["p-value"])
+        for col in range(len(col_labels)):
+            table[row, col].set_facecolor("#fce8e8" if p < 0.05 and col == 4 else bg)
+            table[row, col].set_edgecolor("#cccccc")
+
+    r2  = f"{fit.rsquared:.4f}"
+    aic = f"{fit.aic:.2f}"
+    ax.set_title(f"{name}   |   R² = {r2}   AIC = {aic}",
+                 fontsize=10, fontweight="bold", loc="left", pad=8)
+
+plt.tight_layout()
+plt.show()
+```
+Based on these values, it is a concern that there could be significant multicollinearity among the features, so VIF was used to compare the features, which are displayed in Figure 7. Based on the results, there is indeed significant multicollinearity, but not severely so, as the values are around 5-7. To reduce the multicollinearity, I then decided to fit a model that only takes in the total personnel within the three categories per 10 000 people. The results, displayed in Figure 8, show that the health expenditure is not statistically significant at the 0.05 level when using the total personnel count. This makes sense, as a sizable sum of a government's health sector expenditure is likely towards the personnel. 
+```{python}
+#| warning: false
+#| message: false
+#| echo: false
+#| fig-cap: "Figure 7: Table to show the VIF values for each feature"
+
+# This block is to compute the VIF values for each feature
+X = df[["health_expense_percent","doctor_10k","nurse_10k","pharm_10k"]].dropna(inplace=False)
+vif_data = pd.DataFrame({
+    "Feature": features,
+    "VIF":     [round(variance_inflation_factor(X.values, i), 4) for i in range(X.shape[1])]
+})
+
+fig, ax = plt.subplots(figsize=(5, 1.8))
+ax.axis("off")
+
+table = ax.table(
+    cellText=vif_data.values.tolist(),
+    colLabels=["Feature", "VIF"],
+    loc="center",
+    cellLoc="center",
+)
+
+table.auto_set_font_size(False)
+table.set_fontsize(10)
+table.scale(1, 1.6)
+
+for col in range(2):
+    table[0, col].set_facecolor("#2c2c2c")
+    table[0, col].set_text_props(color="white", fontweight="bold")
+
+for row in range(1, len(features) + 1):
+    bg = "#f2f2f2" if row % 2 == 0 else "white"
+    vif_val = vif_data.iloc[row - 1]["VIF"]
+    for col in range(2):
+        table[row, col].set_facecolor("#fce8e8" if vif_val > 5 and col == 1 else bg)
+        table[row, col].set_edgecolor("#cccccc")
+
+plt.tight_layout()
+plt.show()
+```
+```{python}
+#| warning: false
+#| message: false
+#| echo: false
+#| fig-cap: "Figure 8: Table showing the summary of a linear regression model for total personnel across the three categories plus the health expense."
+
+df["personnel_10k"] = df["doctor_10k"] + df["nurse_10k"] + df["pharm_10k"]
+
+clean = df.dropna(subset=["new_cases", "health_expense_percent", "personnel_10k"])
+fit   = smf.ols("new_cases ~ health_expense_percent + personnel_10k", data=clean).fit()
+
+coef_df = pd.DataFrame({
+    "Term":    fit.params.index,
+    "Coef":    fit.params.round(4),
+    "p-value": fit.pvalues.round(4),
+}).reset_index(drop=True)
+
+summary_df = pd.DataFrame({
+    "Metric": ["R²", "Adj. R²", "AIC"],
+    "Value":  [f"{fit.rsquared:.4f}", f"{fit.rsquared_adj:.4f}", f"{fit.aic:.2f}"],
+})
+
+fig, axes = plt.subplots(1, 2, figsize=(9, 2))
+fig.suptitle("new_cases ~ health_expense_percent + personnel_10k",
+             fontweight="bold", fontsize=10, y=1.02)
+
+for ax, data, title in zip(axes,
+                           [coef_df, summary_df],
+                           ["Coefficients", "Model Fit"]):
+    ax.axis("off")
+    table = ax.table(cellText=data.values.tolist(),
+                     colLabels=data.columns.tolist(),
+                     loc="center", cellLoc="center")
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1, 1.6)
+
+    for col in range(len(data.columns)):
+        table[0, col].set_facecolor("#2c2c2c")
+        table[0, col].set_text_props(color="white", fontweight="bold")
+
+    for row in range(1, len(data) + 1):
+        bg = "#f2f2f2" if row % 2 == 0 else "white"
+        for col in range(len(data.columns)):
+            table[row, col].set_facecolor(bg)
+            table[row, col].set_edgecolor("#cccccc")
+        # highlight significant p-values in coefficient table
+        if data is coef_df:
+            p = float(coef_df.iloc[row - 1]["p-value"])
+            table[row, 2].set_facecolor("#fce8e8" if p < 0.05 else bg)
+
+plt.tight_layout()
+plt.show()
+```
+From here, I then decided to impute linearly much of the originally missing values and refit some models, whose results are shown in Figure 9. The imputations are done on a country by country basis, using the most recent existing years with data to impute. In terms of the r-squared, proportionally speaking, removing the doctor count reduces the performance to a more noticable degree than removing other features. Also notably, with the exception of nurse/midwife and pharmacist counts, other features are shown as non-significant in any model when using the imputed data. Even pharmacist count was only statistically insignificant when health expenditure was excluded as a feature. Though there is a decrease in r-squared when compared to the models not using the imputed dataset.
+```{python}
+#| warning: false
+#| message: false
+#| echo: false
+
+# This block is to impute missing values by assuming that the data follows a linear trend within a country over time
+worker_cols = ["health_expense_percent", "doctor_10k", "nurse_10k", "pharm_10k"]
+df_imputed = df.copy().sort_values(['country', 'year'])
+
+for col in worker_cols:
+    df_imputed[col] = (
+        df_imputed.groupby("country")[col]
+        .transform(lambda x: x.interpolate(method="linear", limit_direction='forward'))
+    )
+```
+```{python}
+#| warning: false
+#| message: false
+#| echo: false
+#| fig-cap: "Figure 9: Tables comparing the statistics of various models using the imputed data."
+
+df_imputed["personnel_10k"] = df_imputed["doctor_10k"] + df_imputed["nurse_10k"] + df_imputed["pharm_10k"]
+
+all_features = ["health_expense_percent", "doctor_10k", "nurse_10k", "pharm_10k"]
+drop_cols = ["doctor_10k", "nurse_10k", "pharm_10k", "health_expense_percent"]
+
+model_specs = {"All features": all_features}
+for col in drop_cols:
+    model_specs[f"Drop {col}"] = [f for f in all_features if f != col]
+model_specs["personnel_10k"] = ["health_expense_percent", "personnel_10k"]
+
+fits = {}
+for name, feats in model_specs.items():
+    clean = df_imputed.dropna(subset=["new_cases"] + feats)
+    fits[name] = smf.ols("new_cases ~ " + " + ".join(feats), data=clean).fit()
+
+fig, axes = plt.subplots(len(fits), 1, figsize=(11, len(fits) * 2.6))
+fig.suptitle("Linear Regression Model Comparison", fontweight="bold", fontsize=12, y=1.01)
+
+for ax, (name, fit) in zip(axes, fits.items()):
+    ax.axis("off")
+
+    coef_df = pd.DataFrame({
+        "Term":    fit.params.index,
+        "Coef":    fit.params.round(4),
+        "Std Err": fit.bse.round(4),
+        "t":       fit.tvalues.round(4),
+        "p-value": fit.pvalues.round(4),
+    })
+
+    col_labels = coef_df.columns.tolist()
+    cell_text  = coef_df.values.tolist()
+
+    table = ax.table(cellText=cell_text, colLabels=col_labels,
+                     loc="center", cellLoc="center")
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1, 1.5)
+
+    for col in range(len(col_labels)):
+        table[0, col].set_facecolor("#2c2c2c")
+        table[0, col].set_text_props(color="white", fontweight="bold")
+
+    for row in range(1, len(cell_text) + 1):
+        bg  = "#f2f2f2" if row % 2 == 0 else "white"
+        p   = float(coef_df.iloc[row - 1]["p-value"])
+        for col in range(len(col_labels)):
+            table[row, col].set_facecolor("#fce8e8" if p < 0.05 and col == 4 else bg)
+            table[row, col].set_edgecolor("#cccccc")
+
+    ax.set_title(
+        f"{name}   |   R² = {fit.rsquared:.4f}   Adj. R² = {fit.rsquared_adj:.4f}   AIC = {fit.aic:.2f}",
+        fontsize=10, fontweight="bold", loc="left", pad=8
+    )
+
+plt.tight_layout()
+plt.show()
+```
+
+## Summary
+At this point, I have investigated the missing data to a substantial extent. In terms of the question, from the models fitted, whose details are shown in Figures 6, 8, and 9, the coefficients seem to suggest that more health personnel slows the spread of HIV, while increased spending hastens the spread. However, in the plots without the health expenditure feature, the coefficients are smaller than in the models with it, which is counter intuitive.
+For future steps, I intend to model both the imputed and non-imputed datasets to compare results and perhaps see if the imputed model is valid. I will use both XGB and linear regression to model, as well as compare the use of 4 models: the all features, nurse count dropped, health expense dropped, and total personnel count. After that analysis has been completed, I will make a conclusion in regards to the question, then develop the website and create make the interactive visualizations.
