@@ -2196,6 +2196,7 @@ font-weight: bold;
 }
 </style>
 <p>David Jiang</p>
+<p><a href="https://github.com/bowlofcupramen/JSC370/tree/0ecd12c18eabbc45add200a542ee33373985c590/project">GitHub Repository Link</a></p>
 <section id="introduction" class="level2">
 <h2 class="anchored" data-anchor-id="introduction">Introduction</h2>
 <p>The dataset used is the World Health Organization’s (WHO) Global Health Observatory’s (GBO) data. The focus of the data obtained from this dataset will be on HIV data, health personnel data, and economic data, specifically economic data as a whole and for health/medical related uses. The question is whether health/medical spendings and personnel affect the spread of HIV, and if so, by how much. The hypotheses is that these factors do indeed affect the spread of HIV, especially the spendings and personnel counts.</p>
@@ -2208,7 +2209,7 @@ font-weight: bold;
 <section id="preliminary-results" class="level2">
 <h2 class="anchored" data-anchor-id="preliminary-results">Preliminary Results</h2>
 <p>To get a rough idea of the amount of missing data, Figure 1 was generated. Based on Figure 1, There are quite a lot of missing values, with there being around 40-50% of the entries being missing for the health personnel. On top of that, there are around 26% of entries missing the new HIV cases value. With this in mind, I then checked the missing values based on year instead, which produced the result in Figure 2. From Figure 2, it can be seen that years 1990-1999 have extremely high proportion of missing, plus the expenditure values for 2024. With this in mind, it was decided that the years 1990-1999 and 2024 would be dropped. Since it is impossible to analyze the years where a country has no data on the number of new cases, entries with no data on new cases were dropped.</p>
-<div id="0da25a65" class="cell" data-message="false" data-execution_count="7">
+<div id="cd643289" class="cell" data-message="false" data-execution_count="7">
 <div class="cell-output cell-output-display">
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
@@ -2218,7 +2219,7 @@ font-weight: bold;
 </div>
 </div>
 </div>
-<div id="8ba0a81e" class="cell" data-message="false" data-execution_count="8">
+<div id="bfe6d130" class="cell" data-message="false" data-execution_count="8">
 <div class="cell-output cell-output-display">
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
@@ -2229,7 +2230,7 @@ font-weight: bold;
 </div>
 </div>
 <p>After checking the proportion of data still missing, Figures 3, 4, and 5 reveal that the main issue in the high amount of missing data for the features remain. Figure 5 in particular shows the higher number of missing data in Africa.</p>
-<div id="e66071bb" class="cell" data-message="false" data-execution_count="10">
+<div id="d785f531" class="cell" data-message="false" data-execution_count="10">
 <div class="cell-output cell-output-display">
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
@@ -2239,7 +2240,7 @@ font-weight: bold;
 </div>
 </div>
 </div>
-<div id="1a074c64" class="cell" data-message="false" data-execution_count="11">
+<div id="06265bf4" class="cell" data-message="false" data-execution_count="11">
 <div class="cell-output cell-output-display">
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
@@ -2249,7 +2250,7 @@ font-weight: bold;
 </div>
 </div>
 </div>
-<div id="012f6a3a" class="cell" data-message="false" data-execution_count="12">
+<div id="f04f4942" class="cell" data-message="false" data-execution_count="12">
 <div class="cell-output cell-output-display">
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
@@ -2260,7 +2261,7 @@ font-weight: bold;
 </div>
 </div>
 <p>I then decided to fit several models to check whether any of the features could be dropped due to low significance. The results are shown in Figure 6. We can see that when any of the personnel features are dropped, government health expenses becomes no longer significant at the 0.05 level. However, in the full model, all features appear to be significant at the 0.05 level. Comparing the r-squared, there does not appear to be any significant difference for any of the models. Furthermore, in the last model, the one with only personnel data, both the nurse/midwives and pharmacist features are no longer significant at the 0.05 level.</p>
-<div id="55881177" class="cell" data-message="false" data-execution_count="13">
+<div id="adfb0835" class="cell" data-message="false" data-execution_count="13">
 <div class="cell-output cell-output-display">
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
@@ -2271,7 +2272,7 @@ font-weight: bold;
 </div>
 </div>
 <p>Based on these values, it is a concern that there could be significant multicollinearity among the features, so VIF was used to compare the features, which are displayed in Figure 7. Based on the results, there is indeed significant multicollinearity, but not severely so, as the values are around 5-7. To reduce the multicollinearity, I then decided to fit a model that only takes in the total personnel within the three categories per 10 000 people. The results, displayed in Figure 8, show that the health expenditure is not statistically significant at the 0.05 level when using the total personnel count. This makes sense, as a sizable sum of a government’s health sector expenditure is likely towards the personnel.</p>
-<div id="a8d7c5e2" class="cell" data-message="false" data-execution_count="14">
+<div id="a925233a" class="cell" data-message="false" data-execution_count="14">
 <div class="cell-output cell-output-display">
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
@@ -2281,7 +2282,7 @@ font-weight: bold;
 </div>
 </div>
 </div>
-<div id="8610d387" class="cell" data-message="false" data-execution_count="15">
+<div id="cffb04b3" class="cell" data-message="false" data-execution_count="15">
 <div class="cell-output cell-output-display">
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
@@ -2292,7 +2293,7 @@ font-weight: bold;
 </div>
 </div>
 <p>From here, I then decided to impute linearly much of the originally missing values and refit some models, whose results are shown in Figure 9. The imputations are done on a country by country basis, using the most recent existing years with data to impute. In terms of the r-squared, proportionally speaking, removing the doctor count reduces the performance to a more noticable degree than removing other features. Also notably, with the exception of nurse/midwife and pharmacist counts, other features are shown as non-significant in any model when using the imputed data. Even pharmacist count was only statistically insignificant when health expenditure was excluded as a feature. Though there is a decrease in r-squared when compared to the models not using the imputed dataset.</p>
-<div id="42b7f546" class="cell" data-message="false" data-execution_count="17">
+<div id="88b10bb4" class="cell" data-message="false" data-execution_count="17">
 <div class="cell-output cell-output-display">
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">

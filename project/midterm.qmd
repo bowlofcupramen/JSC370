@@ -127,6 +127,8 @@ dfs['HWF_0014'].rename(columns={"Value": "pharm_10k"}, inplace=True)
 for new_df in dfs:
     df = pd.merge(df, dfs[new_df], on=['country', 'region', 'year'], how='left')
 ```
+[GitHub Repository Link](https://github.com/bowlofcupramen/JSC370/tree/0ecd12c18eabbc45add200a542ee33373985c590/project)
+
 ## Introduction
 The dataset used is the World Health Organization's (WHO) Global Health Observatory's (GBO) data. The focus of the data obtained from this dataset will be on HIV data, health personnel data, and economic data, specifically economic data as a whole and for health/medical related uses. The question is whether health/medical spendings and personnel affect the spread of HIV, and if so, by how much. The hypotheses is that these factors do indeed affect the spread of HIV, especially the spendings and personnel counts. 
 
